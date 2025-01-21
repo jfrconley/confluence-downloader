@@ -1,0 +1,77 @@
+{
+  "name": "confluence-downloader",
+  "version": "0.0.0",
+  "description": "Downloads Confluence spaces and converts to markdown",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "keywords": [
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "licenses": [
+    {
+      "type": "MIT"
+    }
+  ],
+  "files": [
+    "dist",
+    "!dist/__tests__",
+    "package.json",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "prepare": "husky install && ts-patch install -s",
+    "lint": "dprint check && eslint --cache .",
+    "lint:fix": "dprint fmt && eslint --cache --fix .",
+    "clean": "git clean -Xdf --exclude=\"!node_modules/**/*\" --exclude=\"!node_modules\" --exclude=\"!.idea\" --exclude=\"!.idea/**/*\" --exclude=\"!.husky\" --exclude=\"!.husky/**/*\"",
+    "compile": "tsc",
+    "test": "vitest --reporter=junit --reporter=basic --outputFile.junit=coverage/junit.xml",
+    "release": "pnpm clean && pnpm build && pnpm lint && changeset publish",
+    "build": "pnpm compile"
+  },
+  "author": "John Conley",
+  "license": "MIT",
+  "devDependencies": {
+    "@rollup/plugin-typescript": "^11.1.6",
+    "@types/fs-extra": "^11.0.4",
+    "@types/markdown-it": "^13.0.7",
+    "@types/turndown": "^5.0.4",
+    "@types/yargs": "^17.0.33",
+    "@typescript-eslint/eslint-plugin": "^8.4.0",
+    "@typescript-eslint/parser": "^8.4.0",
+    "@vitest/coverage-v8": "^2.0.5",
+    "dprint": "^0.47.2",
+    "eslint": "^9.9.1",
+    "husky": "^9.1.5",
+    "rollup-plugin-sourcemaps": "^0.6.3",
+    "ts-patch": "^3.2.1",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  },
+  "dependencies": {
+    "@nrfcloud/ts-json-schema-transformer": "^3.1.0",
+    "@types/cli-progress": "^3.11.6",
+    "@types/node": "^22.10.7",
+    "axios": "^1.6.7",
+    "chalk": "^5.4.1",
+    "cli-progress": "^3.12.0",
+    "dotenv": "^16.4.5",
+    "fs-extra": "^11.2.0",
+    "markdown-it": "^14.0.0",
+    "turndown": "^7.1.2",
+    "yargs": "^17.7.2"
+  },
+  "bin": {
+    "confluence-downloader": "./dist/cli.js"
+  }
+}

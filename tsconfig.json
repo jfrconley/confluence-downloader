@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "target": "ES2023",
+    "strict": true,
+    "outDir": "dist/",
+    "declaration": true,
+    "skipLibCheck": true,
+    "noUnusedParameters": false,
+    "sourceMap": true,
+    "noUnusedLocals": false,
+    "rootDir": "src",
+    "plugins": [
+      {
+        "transform": "@nrfcloud/ts-json-schema-transformer/dist/transform"
+      }
+    ],
+    "composite": true,
+    "types": [
+      "node",
+      "vitest/globals"
+    ],
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "experimentalDecorators": true,
+    "stripInternal": true,
+    "paths": {}
+  },
+  "include": [
+    "src/**/*",
+    "src/**/*.json"
+  ]
+}
