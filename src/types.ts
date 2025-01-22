@@ -3,6 +3,8 @@ export interface ConfluenceConfig {
     apiToken: string;
     spaceKey: string;
     outputDir: string;
+    concurrency?: number;
+    onProgress?: (status: string) => void;
 }
 
 export interface ConfluenceLabel {
@@ -56,6 +58,11 @@ export interface ConfluencePage {
             }>;
         };
     };
+    // Temporary v2 fields for hierarchy building
+    _v2?: {
+        parentId?: string;
+        parentType?: string;
+    };
 }
 
 export interface ConfluenceComment {
@@ -70,4 +77,39 @@ export interface ConfluenceComment {
         displayName: string;
     };
     created: string;
+}
+
+// New types for library management
+export interface SpaceMetadata {
+    key: string;
+    name: string;
+    description?: string;
+    lastSynced: string;
+}
+
+export interface SpaceConfig {
+    spaceKey: string;
+    localPath: string;
+    lastSync: string;
+}
+
+export interface ConfluenceLibraryConfig {
+    baseUrl: string;
+    spaces: SpaceConfig[];
+}
+
+export interface LibraryOptions {
+    baseUrl: string;
+    apiToken: string;
+    rootDir: string;
+}
+
+export interface SpaceInfo {
+    key: string;
+    name: string;
+    description?: {
+        plain: {
+            value: string;
+        };
+    };
 } 

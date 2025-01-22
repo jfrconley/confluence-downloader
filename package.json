@@ -59,14 +59,18 @@
     "vitest": "^2.0.5"
   },
   "dependencies": {
+    "@inquirer/prompts": "^7.2.3",
     "@nrfcloud/ts-json-schema-transformer": "^3.1.0",
     "@types/cli-progress": "^3.11.6",
+    "@types/inquirer": "^9.0.7",
     "@types/node": "^22.10.7",
     "axios": "^1.6.7",
     "chalk": "^5.4.1",
     "cli-progress": "^3.12.0",
     "dotenv": "^16.4.5",
     "fs-extra": "^11.2.0",
+    "inquirer": "^12.3.2",
+    "inquirer-select-pro": "1.0.0-alpha.9",
     "markdown-it": "^14.0.0",
     "turndown": "^7.1.2",
     "yargs": "^17.7.2"
