@@ -5,6 +5,7 @@ export interface ConfluenceConfig {
     outputDir: string;
     concurrency?: number;
     onProgress?: (status: string) => void;
+    enableLogging?: boolean;
 }
 
 export interface ConfluenceLabel {
@@ -101,7 +102,7 @@ export interface ConfluenceLibraryConfig {
 export interface LibraryOptions {
     baseUrl: string;
     apiToken: string;
-    rootDir: string;
+    configPath: string;
 }
 
 export interface SpaceInfo {

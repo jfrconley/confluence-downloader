@@ -1,6 +1,8 @@
 import type { ConfluenceConfig, ConfluencePage, ConfluenceComment } from './types.js';
 import fs from 'fs-extra';
 import path from 'path';
+import { Transform, Readable, pipeline } from 'stream';
+import { promisify } from 'util';
 
 interface SpaceInfo {
     key: string;
@@ -29,13 +31,6 @@ export class ConfluenceClient {
         this.concurrency = 1; // Disable concurrency
         this.config = config;
         
-        // Set up logging
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        this.logFile = path.join(config.outputDir, `confluence-fetch-${timestamp}.log`);
-        
-        // Ensure output directory exists
-        fs.ensureDirSync(config.outputDir);
-        
         // For Atlassian Cloud, the username is your email and the password is your API token
         const authString = Buffer.from(`${process.env.CONFLUENCE_EMAIL}:${this.apiToken}`).toString('base64');
         
@@ -44,15 +39,33 @@ export class ConfluenceClient {
             'Content-Type': 'application/json',
         };
 
-        // Initialize log file
-        this.log('Confluence client initialized', {
-            baseUrl: this.baseUrl,
-            spaceKey: this.spaceKey,
-            concurrency: this.concurrency,
-        });
+        // Only set up logging if explicitly enabled and we have an output directory
+        if (config.enableLogging && config.outputDir) {
+            // Set up logging
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            this.logFile = path.join(config.outputDir, `confluence-fetch-${timestamp}.log`);
+            
+            // Ensure output directory exists before trying to create log file
+            fs.ensureDirSync(config.outputDir);
+
+            // Initialize log file
+            this.log('Confluence client initialized', {
+                baseUrl: this.baseUrl,
+                spaceKey: this.spaceKey,
+                concurrency: this.concurrency,
+            }).catch(error => {
+                console.error('Failed to write to log file:', error);
+            });
+        } else {
+            this.logFile = '';
+        }
     }
 
     private async log(message: string, data?: any): Promise<void> {
+        // Skip logging if no log file or logging is disabled
+        if (!this.logFile || !this.config.enableLogging) {
+            return;
+        }
         const timestamp = new Date().toISOString();
         const logEntry = `[${timestamp}] ${message}\n${data ? JSON.stringify(data, null, 2) + '\n' : ''}`;
         await fs.appendFile(this.logFile, logEntry);
@@ -213,13 +226,12 @@ export class ConfluenceClient {
 
     async getAllPages(spaceKey: string): Promise<ConfluencePage[]> {
         // First, get the total page count
+        this.config.onProgress?.('Counting pages in space...');
         const totalPages = await this.getPageCount(spaceKey);
         if (totalPages === 0) {
             this.config.onProgress?.('No pages found');
             return [];
         }
-
-        this.config.onProgress?.(`Found ${totalPages} pages. Starting download...`);
 
         // Get space ID first
         const spaceResponse = await this.fetchJson<{
@@ -234,135 +246,200 @@ export class ConfluenceClient {
 
         const spaceId = spaceResponse.results[0].id;
         const pages: ConfluencePage[] = [];
-        let cursor: string | undefined;
-        const limit = 100;
-
-        do {
-            const response = await this.fetchJson<{
-                results: any[];
-                _links: {
-                    next?: string;
-                };
-            }>(`/api/v2/spaces/${spaceId}/pages`, {
-                limit,
-                ...(cursor ? { cursor } : {}),
-                'body-format': 'storage',
-            });
-
-            // Convert v2 pages to v1 format for compatibility
-            const convertedPages = response.results.map(page => ({
-                id: page.id,
-                title: page.title,
-                body: {
-                    storage: {
-                        value: page.body.storage.value,
-                        representation: 'storage',
-                    }
-                },
-                _links: {
-                    webui: page._links.webui,
-                },
-                ancestors: [], // We'll build this from parentId
-                space: {
-                    key: spaceKey,
-                },
-                children: {
-                    page: {
-                        results: [], // We'll build this from parent/child relationships
-                    }
-                },
-                // Store v2 specific fields for building hierarchy
-                _v2: {
-                    parentId: page.parentId,
-                    parentType: page.parentType,
-                }
-            }));
-
-            pages.push(...convertedPages);
-
-            // Show progress based on total known pages
-            const progress = Math.round((pages.length / totalPages) * 100);
-            this.config.onProgress?.(`Downloading pages... ${progress}% (${pages.length}/${totalPages})`);
-
-            // Get cursor from next link if it exists
-            const nextLink = response._links.next;
-            cursor = nextLink ? new URLSearchParams(nextLink.split('?')[1]).get('cursor') || undefined : undefined;
-        } while (cursor);
-
-        if (pages.length === 0) {
-            this.config.onProgress?.('No pages found');
-            return [];
-        }
-
-        // Build page hierarchy
-        this.config.onProgress?.('Building page hierarchy...');
-        const pageMap = new Map(pages.map(page => [page.id, page]));
+        let completedPages = 0;
         
-        // First pass: Build children relationships
-        for (const page of pages) {
-            if (page._v2?.parentId && page._v2.parentType === 'page') {
-                const parentPage = pageMap.get(page._v2.parentId);
-                if (parentPage) {
-                    // Initialize the children structure if needed
-                    if (!parentPage.children?.page?.results) {
-                        const children = {
-                            page: {
-                                results: []
+        // Create the pipeline
+        const pipelineAsync = promisify(pipeline);
+        await pipelineAsync(
+            this.createPageStream(spaceId, totalPages),
+            this.createHierarchyTransform(),
+            this.createMetadataTransform(),
+            new Transform({
+                objectMode: true,
+                transform: (page: ConfluencePage, encoding, callback) => {
+                    pages.push(page);
+                    completedPages++;
+                    const progress = Math.round((completedPages / totalPages) * 100);
+                    this.config.onProgress?.(`Processing pages... ${progress}% (${completedPages}/${totalPages})`);
+                    callback();
+                }
+            })
+        );
+
+        return pages;
+    }
+
+    private createPageStream(spaceId: string, totalPages: number): Readable {
+        let cursor: string | undefined;
+        let downloadedPages = 0;
+        const limit = 100;
+        const self = this;
+
+        return new Readable({
+            objectMode: true,
+            async read() {
+                try {
+                    if (downloadedPages >= totalPages) {
+                        this.push(null);
+                        return;
+                    }
+
+                    const response = await self.fetchJson<{
+                        results: any[];
+                        _links: { next?: string };
+                    }>(`/api/v2/spaces/${spaceId}/pages`, {
+                        limit,
+                        ...(cursor ? { cursor } : {}),
+                        'body-format': 'storage',
+                    });
+
+                    // Convert and push each page individually
+                    for (const page of response.results) {
+                        const convertedPage = {
+                            id: page.id,
+                            title: page.title,
+                            body: {
+                                storage: {
+                                    value: page.body.storage.value,
+                                    representation: 'storage',
+                                }
+                            },
+                            _links: {
+                                webui: page._links.webui,
+                            },
+                            ancestors: [],
+                            space: {
+                                key: self.spaceKey,
+                            },
+                            children: {
+                                page: {
+                                    results: [],
+                                }
+                            },
+                            _v2: {
+                                parentId: page.parentId,
+                                parentType: page.parentType,
                             }
-                        } as NonNullable<ConfluencePage['children']>;
-                        parentPage.children = children;
+                        };
+                        this.push(convertedPage);
+                        downloadedPages++;
+                    }
+
+                    // Get next cursor
+                    const nextLink = response._links.next;
+                    cursor = nextLink ? new URLSearchParams(nextLink.split('?')[1]).get('cursor') || undefined : undefined;
+                    
+                    if (!cursor) {
+                        this.push(null);
+                    }
+                } catch (error) {
+                    this.emit('error', error);
+                }
+            }
+        });
+    }
+
+    private createHierarchyTransform(): Transform {
+        const pageMap = new Map<string, ConfluencePage>();
+        const pages: ConfluencePage[] = [];
+        const self = this;
+
+        return new Transform({
+            objectMode: true,
+            transform(page: ConfluencePage, encoding, callback) {
+                pages.push(page);
+                pageMap.set(page.id, page);
+                callback();
+            },
+            flush(callback) {
+                // Build hierarchy once we have all pages
+                for (const page of pages) {
+                    if (page._v2?.parentId && page._v2.parentType === 'page') {
+                        const parentPage = pageMap.get(page._v2.parentId);
+                        if (parentPage) {
+                            if (!parentPage.children?.page?.results) {
+                                const children = {
+                                    page: {
+                                        results: []
+                                    }
+                                } as NonNullable<ConfluencePage['children']>;
+                                parentPage.children = children;
+                            }
+                            
+                            (parentPage.children!.page!.results).push({
+                                id: page.id,
+                                title: page.title
+                            });
+                        }
+                    }
+                }
+
+                // Second pass: Build ancestors and push pages
+                for (const page of pages) {
+                    const ancestors: Array<{ id: string; title: string }> = [];
+                    let currentPage = page;
+                    
+                    while (currentPage._v2?.parentId && currentPage._v2.parentType === 'page') {
+                        const parentPage = pageMap.get(currentPage._v2.parentId);
+                        if (!parentPage) break;
+                        
+                        ancestors.unshift({
+                            id: parentPage.id,
+                            title: parentPage.title
+                        });
+                        currentPage = parentPage;
                     }
                     
-                    // Now TypeScript knows this is safe
-                    (parentPage.children!.page!.results).push({
-                        id: page.id,
-                        title: page.title
-                    });
+                    page.ancestors = ancestors;
+                    delete page._v2;
+                    this.push(page);
+                }
+                
+                callback();
+            }
+        });
+    }
+
+    private createMetadataTransform(): Transform {
+        let processedPages = 0;
+        let totalPages = 0;
+        const batchSize = 100;
+        let currentBatch: ConfluencePage[] = [];
+        const self = this;
+        const transform = new Transform({
+            objectMode: true,
+            transform(page: ConfluencePage, encoding, callback) {
+                currentBatch.push(page);
+                totalPages++;
+
+                if (currentBatch.length >= batchSize) {
+                    processBatch(currentBatch, transform)
+                        .then(() => {
+                            processedPages += currentBatch.length;
+                            currentBatch = [];
+                            callback();
+                        })
+                        .catch(callback);
+                } else {
+                    callback();
+                }
+            },
+            flush(callback) {
+                if (currentBatch.length > 0) {
+                    processBatch(currentBatch, transform)
+                        .then(() => callback())
+                        .catch(callback);
+                } else {
+                    callback();
                 }
             }
-        }
+        });
 
-        // Second pass: Build ancestors array for each page
-        for (const page of pages) {
-            const ancestors: Array<{ id: string; title: string }> = [];
-            let currentPage = page;
-            
-            while (currentPage._v2?.parentId && currentPage._v2.parentType === 'page') {
-                const parentPage = pageMap.get(currentPage._v2.parentId);
-                if (!parentPage) break;
-                
-                ancestors.unshift({
-                    id: parentPage.id,
-                    title: parentPage.title
-                });
-                currentPage = parentPage;
-            }
-            
-            page.ancestors = ancestors;
-            // Clean up v2 specific data
-            delete page._v2;
-        }
-
-        this.config.onProgress?.(`Fetching metadata for ${pages.length} pages...`);
-
-        // Then fetch additional metadata in parallel batches
-        const batchSize = 100;
-        const enrichedPages: ConfluencePage[] = [];
-        let errorCount = 0;
-
-        try {
-            // Process pages sequentially
-            for (let i = 0; i < pages.length; i += batchSize) {
-                const start = i;
-                const end = Math.min(start + batchSize, pages.length);
-                const batch = pages.slice(start, end);
-                
-                const progress = Math.round((start / pages.length) * 100);
-                this.config.onProgress?.(`Fetching metadata... ${progress}% (${start}/${pages.length})`);
-                
-                const detailsPromises = batch.map(async (page) => {
+        async function processBatch(batch: ConfluencePage[], stream: Transform) {
+            const enrichedPages = await Promise.all(
+                batch.map(async (page) => {
                     try {
-                        const details = await this.getPageDetails(page.id);
+                        const details = await self.getPageDetails(page.id);
                         return {
                             ...page,
                             metadata: details.metadata,
@@ -372,23 +449,17 @@ export class ConfluenceClient {
                             children: details.children,
                         };
                     } catch (error) {
-                        errorCount++;
                         return page;
                     }
-                });
+                })
+            );
 
-                const batchResults = await Promise.all(detailsPromises);
-                enrichedPages.push(...batchResults);
+            for (const page of enrichedPages) {
+                stream.push(page);
             }
-        } catch (error) {
-            this.config.onProgress?.(`Error during metadata fetch: ${error}`);
-            throw error;
         }
 
-        if (errorCount > 0) {
-            this.config.onProgress?.(`Completed with ${errorCount} errors`);
-        }
-        return enrichedPages;
+        return transform;
     }
 
     async getComments(pageId: string): Promise<ConfluenceComment[]> {

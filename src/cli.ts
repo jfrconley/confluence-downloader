@@ -2,31 +2,63 @@
 
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import type { ConfluenceConfig } from './types.js';
-import { config } from 'dotenv';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import os from 'os';
-import cliProgress from 'cli-progress';
-import chalk from 'chalk';
 import { ConfluenceLibrary } from './library.js';
 import { InteractiveConfluenceCLI } from './interactive.js';
+import dotenv from 'dotenv';
+import os from 'os';
+import type { ConfluenceConfig } from './types.js';
+import chalk from 'chalk';
 
-// Get the directory of the current module
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// Load environment variables
+dotenv.config();
 
-// Load environment variables from .env file
-config({ path: join(dirname(__dirname), '.env') });
+interface CliArgs {
+    token: string;
+    base: string;
+    config: string;
+    rootDir?: string;
+    baseUrl?: string;
+    apiToken?: string;
+    spaceKey?: string;
+    localPath?: string;
+    outputDir?: string;
+    email?: string;
+}
 
 async function main() {
     const argv = await yargs(hideBin(process.argv))
-        .command('interactive', 'Start interactive mode', {
-            rootDir: {
+        .env('CONFLUENCE')
+        .options({
+            token: {
+                alias: 't',
                 type: 'string',
-                description: 'Root directory for the library',
-                default: './confluence-library',
+                description: 'Confluence API token',
+                demandOption: true,
             },
+            base: {
+                alias: 'b',
+                type: 'string',
+                description: 'Confluence base URL',
+                demandOption: true,
+            },
+            config: {
+                alias: 'c',
+                type: 'string',
+                description: 'Path to confluence.json config file',
+                demandOption: true,
+            }
+        })
+        .command('interactive', 'Start interactive mode', {}, async (argv) => {
+            const args = argv as unknown as CliArgs;
+            const library = new ConfluenceLibrary({
+                baseUrl: args.base,
+                apiToken: args.token,
+                configPath: args.config,
+            });
+
+            await library.initialize();
+            const cli = new InteractiveConfluenceCLI(library);
+            await cli.start();
         })
         .command('init', 'Initialize a new Confluence library', {
             rootDir: {
@@ -102,30 +134,19 @@ async function main() {
                 default: Math.max(1, Math.min(os.cpus().length - 1, 4)),
             },
         })
-        .demandCommand(1, 'You must provide a command')
+        .command('show', 'Show configuration location and data')
+        .demandCommand(1)
         .help()
         .parse();
 
     const command = argv._[0];
 
     switch (command) {
-        case 'interactive': {
-            const library = new ConfluenceLibrary({
-                rootDir: argv.rootDir as string,
-                baseUrl: process.env.CONFLUENCE_BASE!,
-                apiToken: process.env.CONFLUENCE_TOKEN!,
-            });
-            await library.initialize();
-            const cli = new InteractiveConfluenceCLI(library);
-            await cli.start();
-            break;
-        }
-
         case 'init': {
             const library = new ConfluenceLibrary({
-                rootDir: argv.rootDir as string,
                 baseUrl: argv.baseUrl as string,
                 apiToken: argv.apiToken as string,
+                configPath: argv.rootDir as string,
             });
             await library.initialize();
             console.log(`Initialized Confluence library in ${argv.rootDir}`);
@@ -134,9 +155,9 @@ async function main() {
 
         case 'add-space': {
             const library = new ConfluenceLibrary({
-                rootDir: argv.rootDir as string,
                 baseUrl: process.env.CONFLUENCE_BASE!,
                 apiToken: process.env.CONFLUENCE_TOKEN!,
+                configPath: process.env.CONFLUENCE_CONFIG!,
             });
             const localPath = argv.localPath || argv.spaceKey;
             await library.addSpace(argv.spaceKey as string, localPath as string);
@@ -146,9 +167,9 @@ async function main() {
 
         case 'remove-space': {
             const library = new ConfluenceLibrary({
-                rootDir: argv.rootDir as string,
                 baseUrl: process.env.CONFLUENCE_BASE!,
                 apiToken: process.env.CONFLUENCE_TOKEN!,
+                configPath: process.env.CONFLUENCE_CONFIG!,
             });
             await library.removeSpace(argv.spaceKey as string);
             console.log(`Removed space ${argv.spaceKey} from library`);
@@ -157,9 +178,9 @@ async function main() {
 
         case 'list-spaces': {
             const library = new ConfluenceLibrary({
-                rootDir: argv.rootDir as string,
                 baseUrl: process.env.CONFLUENCE_BASE!,
                 apiToken: process.env.CONFLUENCE_TOKEN!,
+                configPath: process.env.CONFLUENCE_CONFIG!,
             });
             const spaces = await library.listSpaces();
             console.log('Spaces in library:');
@@ -172,9 +193,9 @@ async function main() {
 
         case 'sync': {
             const library = new ConfluenceLibrary({
-                rootDir: argv.rootDir as string,
                 baseUrl: process.env.CONFLUENCE_BASE!,
                 apiToken: process.env.CONFLUENCE_TOKEN!,
+                configPath: process.env.CONFLUENCE_CONFIG!,
             });
             if (argv.spaceKey) {
                 await library.syncSpace(argv.spaceKey as string);
@@ -210,19 +231,34 @@ async function main() {
 
             process.env.CONFLUENCE_EMAIL = argv.email as string;
             const library = new ConfluenceLibrary({
-                rootDir: config.outputDir,
                 baseUrl: config.baseUrl,
                 apiToken: config.apiToken,
+                configPath: config.outputDir,
             });
             await library.initialize();
             await library.addSpace(config.spaceKey, '.');
             await library.syncSpace(config.spaceKey);
             break;
         }
+
+        case 'show': {
+            const library = new ConfluenceLibrary({
+                baseUrl: process.env.CONFLUENCE_BASE!,
+                apiToken: process.env.CONFLUENCE_TOKEN!,
+                configPath: process.env.CONFLUENCE_CONFIG!,
+            });
+            const config = await library.getConfig();
+            console.log(chalk.cyan('Configuration Location:'));
+            console.log(library.configPath);
+            console.log();
+            console.log(chalk.cyan('Configuration Data:'));
+            console.log(JSON.stringify(config, null, 2));
+            break;
+        }
     }
 }
 
-main().catch((error) => {
+main().catch((error: Error) => {
     console.error('Error:', error.message);
     process.exit(1);
 }); 
