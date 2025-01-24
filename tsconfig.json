@@ -3,7 +3,7 @@
     "module": "NodeNext",
     "target": "ES2023",
     "strict": true,
-    "outDir": "dist/",
+    "outDir": "dist",
     "declaration": true,
     "skipLibCheck": true,
     "noUnusedParameters": false,
@@ -15,7 +15,6 @@
         "transform": "@nrfcloud/ts-json-schema-transformer/dist/transform"
       }
     ],
-    "composite": true,
     "types": [
       "node",
       "vitest/globals"
@@ -24,6 +23,8 @@
     "resolveJsonModule": true,
     "experimentalDecorators": true,
     "stripInternal": true,
+    "incremental": true,
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
     "paths": {}
   },
   "include": [
