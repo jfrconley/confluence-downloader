@@ -1,8 +1,8 @@
-import type { ConfluenceConfig, ConfluencePage, ConfluenceComment } from './types.js';
-import fs from 'fs-extra';
-import path from 'path';
-import { Transform, Readable, pipeline } from 'stream';
-import { promisify } from 'util';
+import fs from "fs-extra";
+import path from "path";
+import { pipeline, Readable, Transform } from "stream";
+import { promisify } from "util";
+import type { ConfluenceComment, ConfluenceConfig, ConfluencePage } from "./types.js";
 
 interface SpaceInfo {
     key: string;
@@ -30,58 +30,58 @@ export class ConfluenceClient {
         this.spaceKey = config.spaceKey;
         this.concurrency = 1; // Disable concurrency
         this.config = config;
-        
+
         // For Atlassian Cloud, the username is your email and the password is your API token
-        const authString = Buffer.from(`${process.env.CONFLUENCE_EMAIL}:${this.apiToken}`).toString('base64');
-        
+        const authString = Buffer.from(`${process.env.CONFLUENCE_EMAIL}:${this.apiToken}`).toString("base64");
+
         this.headers = {
-            'Authorization': `Basic ${authString}`,
-            'Content-Type': 'application/json',
+            "Authorization": `Basic ${authString}`,
+            "Content-Type": "application/json",
         };
 
         // Only set up logging if explicitly enabled and we have an output directory
         if (config.enableLogging && config.outputDir) {
             // Set up logging
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
             this.logFile = path.join(config.outputDir, `confluence-fetch-${timestamp}.log`);
-            
+
             // Ensure output directory exists before trying to create log file
             fs.ensureDirSync(config.outputDir);
 
             // Initialize log file
-            this.log('Confluence client initialized', {
+            this.log("Confluence client initialized", {
                 baseUrl: this.baseUrl,
                 spaceKey: this.spaceKey,
                 concurrency: this.concurrency,
             }).catch(error => {
-                console.error('Failed to write to log file:', error);
+                console.error("Failed to write to log file:", error);
             });
         } else {
-            this.logFile = '';
+            this.logFile = "";
         }
     }
 
-    private async log(message: string, data?: any): Promise<void> {
+    private async log(message: string, data?: Record<string, unknown>): Promise<void> {
         // Skip logging if no log file or logging is disabled
         if (!this.logFile || !this.config.enableLogging) {
             return;
         }
         const timestamp = new Date().toISOString();
-        const logEntry = `[${timestamp}] ${message}\n${data ? JSON.stringify(data, null, 2) + '\n' : ''}`;
+        const logEntry = `[${timestamp}] ${message}\n${data ? JSON.stringify(data, null, 2) + "\n" : ""}`;
         await fs.appendFile(this.logFile, logEntry);
     }
 
     private async fetchJson<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
         this.requestCount++;
         const queryString = new URLSearchParams(
-            Object.entries(params).map(([k, v]) => [k, v.toString()])
+            Object.entries(params).map(([k, v]) => [k, v.toString()]),
         ).toString();
-        
-        const url = `${this.baseUrl}/wiki${path}${queryString ? '?' + queryString : ''}`;
-        
+
+        const url = `${this.baseUrl}/wiki${path}${queryString ? "?" + queryString : ""}`;
+
         // Log request
         await this.log(`Request #${this.requestCount}: ${url}`, {
-            method: 'GET',
+            method: "GET",
             headers: this.headers,
             params,
         });
@@ -124,18 +124,24 @@ export class ConfluenceClient {
         }
     }
 
-    private truncateForLog(data: any): any {
-        if (typeof data !== 'object' || data === null) {
+    private truncateForLog(data: unknown): unknown {
+        if (typeof data !== "object" || data === null) {
             return data;
         }
 
-        const truncated: any = Array.isArray(data) ? [] : {};
-        for (const [key, value] of Object.entries(data)) {
-            if (typeof value === 'string' && value.length > 500) {
-                truncated[key] = value.substring(0, 500) + '... [truncated]';
+        if (Array.isArray(data)) {
+            return data.map(item => this.truncateForLog(item));
+        }
+
+        const truncated: Record<string, unknown> = {};
+        const record = data as Record<string, unknown>;
+
+        for (const [key, value] of Object.entries(record)) {
+            if (typeof value === "string" && value.length > 500) {
+                truncated[key] = value.substring(0, 500) + "... [truncated]";
             } else if (Array.isArray(value)) {
-                truncated[key] = `Array(${value.length}) [${value.slice(0, 3).map(v => typeof v).join(', ')}...]`;
-            } else if (typeof value === 'object' && value !== null) {
+                truncated[key] = `Array(${value.length}) [${value.slice(0, 3).map(v => typeof v).join(", ")}...]`;
+            } else if (typeof value === "object" && value !== null) {
                 truncated[key] = this.truncateForLog(value);
             } else {
                 truncated[key] = value;
@@ -146,7 +152,7 @@ export class ConfluenceClient {
 
     private async getPageDetails(pageId: string): Promise<Partial<ConfluencePage>> {
         const response = await this.fetchJson<ConfluencePage>(`/rest/api/content/${pageId}`, {
-            expand: 'metadata.labels,history.lastUpdated,history.createdBy,version,space,children.page',
+            expand: "metadata.labels,history.lastUpdated,history.createdBy,version,space,children.page",
         });
         return response;
     }
@@ -154,19 +160,19 @@ export class ConfluenceClient {
     async getSpaceInfo(spaceKey?: string): Promise<SpaceInfo> {
         const key = spaceKey || this.spaceKey;
         const response = await this.fetchJson<SpaceInfo>(`/rest/api/space/${key}`, {
-            expand: 'description.plain',
+            expand: "description.plain",
         });
         return response;
     }
 
     async getPageCount(spaceKey: string): Promise<number> {
-        this.config.onProgress?.('Counting total pages...');
+        this.config.onProgress?.("Counting total pages...");
         const response = await this.fetchJson<{
-            results: any[];
+            results: Array<{ id: string }>;
             _links: {
                 next?: string;
             };
-        }>('/api/v2/spaces', {
+        }>("/api/v2/spaces", {
             keys: spaceKey,
         });
 
@@ -180,7 +186,7 @@ export class ConfluenceClient {
 
         do {
             const pagesResponse = await this.fetchJson<{
-                results: any[];
+                results: Array<{ id: string }>;
                 _links: {
                     next?: string;
                 };
@@ -190,10 +196,10 @@ export class ConfluenceClient {
             });
 
             totalPages += pagesResponse.results.length;
-            
+
             // Get cursor from next link if it exists
             const nextLink = pagesResponse._links.next;
-            cursor = nextLink ? new URLSearchParams(nextLink.split('?')[1]).get('cursor') || undefined : undefined;
+            cursor = nextLink ? new URLSearchParams(nextLink.split("?")[1]).get("cursor") || undefined : undefined;
         } while (cursor);
 
         return totalPages;
@@ -207,8 +213,8 @@ export class ConfluenceClient {
         while (true) {
             const response = await this.fetchJson<{
                 results: SpaceInfo[];
-            }>('/rest/api/space', {
-                expand: 'description.plain',
+            }>("/rest/api/space", {
+                expand: "description.plain",
                 start,
                 limit,
             });
@@ -226,17 +232,17 @@ export class ConfluenceClient {
 
     async getAllPages(spaceKey: string): Promise<ConfluencePage[]> {
         // First, get the total page count
-        this.config.onProgress?.('Counting pages in space...');
+        this.config.onProgress?.("Counting pages in space...");
         const totalPages = await this.getPageCount(spaceKey);
         if (totalPages === 0) {
-            this.config.onProgress?.('No pages found');
+            this.config.onProgress?.("No pages found");
             return [];
         }
 
         // Get space ID first
         const spaceResponse = await this.fetchJson<{
             results: Array<{ id: string }>;
-        }>('/api/v2/spaces', {
+        }>("/api/v2/spaces", {
             keys: spaceKey,
         });
 
@@ -247,7 +253,7 @@ export class ConfluenceClient {
         const spaceId = spaceResponse.results[0].id;
         const pages: ConfluencePage[] = [];
         let completedPages = 0;
-        
+
         // Create the pipeline
         const pipelineAsync = promisify(pipeline);
         await pipelineAsync(
@@ -262,8 +268,8 @@ export class ConfluenceClient {
                     const progress = Math.round((completedPages / totalPages) * 100);
                     this.config.onProgress?.(`Processing pages... ${progress}% (${completedPages}/${totalPages})`);
                     callback();
-                }
-            })
+                },
+            }),
         );
 
         return pages;
@@ -273,24 +279,38 @@ export class ConfluenceClient {
         let cursor: string | undefined;
         let downloadedPages = 0;
         const limit = 100;
-        const self = this;
 
-        return new Readable({
+        const stream = new Readable({
             objectMode: true,
-            async read() {
+            read: async () => {
                 try {
                     if (downloadedPages >= totalPages) {
-                        this.push(null);
+                        stream.push(null);
                         return;
                     }
 
-                    const response = await self.fetchJson<{
-                        results: any[];
+                    interface PageResponse {
+                        id: string;
+                        title: string;
+                        body: {
+                            storage: {
+                                value: string;
+                            };
+                        };
+                        _links: {
+                            webui: string;
+                        };
+                        parentId?: string;
+                        parentType?: string;
+                    }
+
+                    const response = await this.fetchJson<{
+                        results: PageResponse[];
                         _links: { next?: string };
                     }>(`/api/v2/spaces/${spaceId}/pages`, {
                         limit,
                         ...(cursor ? { cursor } : {}),
-                        'body-format': 'storage',
+                        "body-format": "storage",
                     });
 
                     // Convert and push each page individually
@@ -301,48 +321,51 @@ export class ConfluenceClient {
                             body: {
                                 storage: {
                                     value: page.body.storage.value,
-                                    representation: 'storage',
-                                }
+                                    representation: "storage",
+                                },
                             },
                             _links: {
                                 webui: page._links.webui,
                             },
                             ancestors: [],
                             space: {
-                                key: self.spaceKey,
+                                key: this.spaceKey,
                             },
                             children: {
                                 page: {
                                     results: [],
-                                }
+                                },
                             },
                             _v2: {
                                 parentId: page.parentId,
                                 parentType: page.parentType,
-                            }
+                            },
                         };
-                        this.push(convertedPage);
+                        stream.push(convertedPage);
                         downloadedPages++;
                     }
 
                     // Get next cursor
                     const nextLink = response._links.next;
-                    cursor = nextLink ? new URLSearchParams(nextLink.split('?')[1]).get('cursor') || undefined : undefined;
-                    
+                    cursor = nextLink
+                        ? new URLSearchParams(nextLink.split("?")[1]).get("cursor") || undefined
+                        : undefined;
+
                     if (!cursor) {
-                        this.push(null);
+                        stream.push(null);
                     }
                 } catch (error) {
-                    this.emit('error', error);
+                    stream.emit("error", error);
                 }
-            }
+            },
         });
+
+        return stream;
     }
 
     private createHierarchyTransform(): Transform {
         const pageMap = new Map<string, ConfluencePage>();
         const pages: ConfluencePage[] = [];
-        const self = this;
 
         return new Transform({
             objectMode: true,
@@ -354,21 +377,21 @@ export class ConfluenceClient {
             flush(callback) {
                 // Build hierarchy once we have all pages
                 for (const page of pages) {
-                    if (page._v2?.parentId && page._v2.parentType === 'page') {
+                    if (page._v2?.parentId && page._v2.parentType === "page") {
                         const parentPage = pageMap.get(page._v2.parentId);
                         if (parentPage) {
                             if (!parentPage.children?.page?.results) {
                                 const children = {
                                     page: {
-                                        results: []
-                                    }
-                                } as NonNullable<ConfluencePage['children']>;
+                                        results: [],
+                                    },
+                                } as NonNullable<ConfluencePage["children"]>;
                                 parentPage.children = children;
                             }
-                            
+
                             (parentPage.children!.page!.results).push({
                                 id: page.id,
-                                title: page.title
+                                title: page.title,
                             });
                         }
                     }
@@ -378,44 +401,39 @@ export class ConfluenceClient {
                 for (const page of pages) {
                     const ancestors: Array<{ id: string; title: string }> = [];
                     let currentPage = page;
-                    
-                    while (currentPage._v2?.parentId && currentPage._v2.parentType === 'page') {
+
+                    while (currentPage._v2?.parentId && currentPage._v2.parentType === "page") {
                         const parentPage = pageMap.get(currentPage._v2.parentId);
                         if (!parentPage) break;
-                        
+
                         ancestors.unshift({
                             id: parentPage.id,
-                            title: parentPage.title
+                            title: parentPage.title,
                         });
                         currentPage = parentPage;
                     }
-                    
+
                     page.ancestors = ancestors;
                     delete page._v2;
                     this.push(page);
                 }
-                
+
                 callback();
-            }
+            },
         });
     }
 
     private createMetadataTransform(): Transform {
-        let processedPages = 0;
-        let totalPages = 0;
         const batchSize = 100;
         let currentBatch: ConfluencePage[] = [];
-        const self = this;
         const transform = new Transform({
             objectMode: true,
-            transform(page: ConfluencePage, encoding, callback) {
+            transform: (page: ConfluencePage, encoding, callback) => {
                 currentBatch.push(page);
-                totalPages++;
 
                 if (currentBatch.length >= batchSize) {
-                    processBatch(currentBatch, transform)
+                    this.processBatch(currentBatch, transform)
                         .then(() => {
-                            processedPages += currentBatch.length;
                             currentBatch = [];
                             callback();
                         })
@@ -424,51 +442,51 @@ export class ConfluenceClient {
                     callback();
                 }
             },
-            flush(callback) {
+            flush: (callback) => {
                 if (currentBatch.length > 0) {
-                    processBatch(currentBatch, transform)
+                    this.processBatch(currentBatch, transform)
                         .then(() => callback())
                         .catch(callback);
                 } else {
                     callback();
                 }
-            }
+            },
         });
 
-        async function processBatch(batch: ConfluencePage[], stream: Transform) {
-            const enrichedPages = await Promise.all(
-                batch.map(async (page) => {
-                    try {
-                        const details = await self.getPageDetails(page.id);
-                        return {
-                            ...page,
-                            metadata: details.metadata,
-                            history: details.history,
-                            version: details.version,
-                            space: details.space,
-                            children: details.children,
-                        };
-                    } catch (error) {
-                        return page;
-                    }
-                })
-            );
-
-            for (const page of enrichedPages) {
-                stream.push(page);
-            }
-        }
-
         return transform;
+    }
+
+    private async processBatch(batch: ConfluencePage[], stream: Transform) {
+        const enrichedPages = await Promise.all(
+            batch.map(async (page) => {
+                try {
+                    const details = await this.getPageDetails(page.id);
+                    return {
+                        ...page,
+                        metadata: details.metadata,
+                        history: details.history,
+                        version: details.version,
+                        space: details.space,
+                        children: details.children,
+                    };
+                } catch {
+                    return page;
+                }
+            }),
+        );
+
+        for (const page of enrichedPages) {
+            stream.push(page);
+        }
     }
 
     async getComments(pageId: string): Promise<ConfluenceComment[]> {
         const response = await this.fetchJson<{
             results: ConfluenceComment[];
         }>(`/rest/api/content/${pageId}/child/comment`, {
-            expand: 'body.storage,author',
+            expand: "body.storage,author",
         });
-        
+
         return response.results;
     }
 }

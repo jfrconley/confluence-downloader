@@ -113,4 +113,4 @@ export interface SpaceInfo {
             value: string;
         };
     };
-} 
+}

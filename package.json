@@ -1,9 +1,13 @@
 {
   "name": "@jfconley/confluence-downloader",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": false,
   "description": "Downloads Confluence spaces and converts to markdown",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jfrconley/confluence-downloader"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "keywords": [

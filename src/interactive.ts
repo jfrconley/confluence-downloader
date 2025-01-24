@@ -1,20 +1,9 @@
-import { select as selectSingle, confirm } from '@inquirer/prompts';
-import { select } from 'inquirer-select-pro';
-import { ConfluenceLibrary } from './library.js';
-import chalk from 'chalk';
-import path from 'path';
-import type { SpaceInfo } from './types.js';
-import inquirer from 'inquirer';
-
-type PromptAnswers = {
-    action: string;
-    spaceKeys: string[];
-    singleSpaceKey: string;
-    localPath: string;
-    localPaths: Record<string, string>;
-    syncNow: boolean;
-    confirm: boolean;
-};
+import { confirm, select as selectSingle } from "@inquirer/prompts";
+import chalk from "chalk";
+import { select } from "inquirer-select-pro";
+import path from "path";
+import { ConfluenceLibrary } from "./library.js";
+import type { SpaceInfo } from "./types.js";
 
 export class InteractiveConfluenceCLI {
     private library: ConfluenceLibrary;
@@ -26,19 +15,19 @@ export class InteractiveConfluenceCLI {
     async start(): Promise<void> {
         while (true) {
             const action = await selectSingle({
-                message: 'What would you like to do?',
+                message: "What would you like to do?",
                 choices: [
-                    { name: 'List spaces', value: 'list' },
-                    { name: 'Add space', value: 'add' },
-                    { name: 'Remove space', value: 'remove' },
-                    { name: 'Sync space', value: 'sync' },
-                    { name: 'Sync all spaces', value: 'sync-all' },
-                    { name: 'Show configuration', value: 'show' },
-                    { name: 'Exit', value: 'exit' },
+                    { name: "List spaces", value: "list" },
+                    { name: "Add space", value: "add" },
+                    { name: "Remove space", value: "remove" },
+                    { name: "Sync space", value: "sync" },
+                    { name: "Sync all spaces", value: "sync-all" },
+                    { name: "Show configuration", value: "show" },
+                    { name: "Exit", value: "exit" },
                 ],
             });
 
-            if (action === 'exit') {
+            if (action === "exit") {
                 break;
             }
 
@@ -56,18 +45,18 @@ export class InteractiveConfluenceCLI {
     private formatSpaceChoice(space: SpaceInfo): string {
         const description = space.description?.plain?.value
             ? chalk.dim(` - ${space.description.plain.value}`)
-            : '';
+            : "";
         return `${chalk.bold(space.name)} ${chalk.cyan(`[${space.key}]`)}${description}`;
     }
 
     private async listSpaces(): Promise<void> {
         const spaces = await this.library.listSpaces();
         if (spaces.length === 0) {
-            console.log(chalk.yellow('No spaces in library'));
+            console.log(chalk.yellow("No spaces in library"));
             return;
         }
 
-        console.log(chalk.bold('\nSpaces in library:'));
+        console.log(chalk.bold("\nSpaces in library:"));
         spaces.forEach(space => {
             console.log(chalk.cyan(`\n${space.spaceKey} (${space.localPath})`));
             console.log(`Last synced: ${new Date(space.lastSync).toLocaleString()}`);
@@ -75,33 +64,33 @@ export class InteractiveConfluenceCLI {
     }
 
     private async addSpace(): Promise<void> {
-        console.log(chalk.cyan('Fetching available spaces from Confluence...'));
+        console.log(chalk.cyan("Fetching available spaces from Confluence..."));
         const availableSpaces = await this.library.getAvailableSpaces();
         const existingSpaces = await this.library.listSpaces();
-        
+
         // Filter out spaces that are already in the library
-        const newSpaces = availableSpaces.filter(space => 
+        const newSpaces = availableSpaces.filter(space =>
             !existingSpaces.some(existing => existing.spaceKey === space.key)
         );
-        
+
         if (newSpaces.length === 0) {
-            console.log(chalk.yellow('No new spaces available to add'));
+            console.log(chalk.yellow("No new spaces available to add"));
             return;
         }
 
         const spaceKeys = await select({
-            message: 'Select spaces to add:',
+            message: "Select spaces to add:",
             multiple: true,
             filter: true,
             required: true,
             clearInputWhenSelected: false,
-            options: (input = '') => {
+            options: (input = "") => {
                 const searchTerm = input.toLowerCase();
                 return newSpaces
-                    .filter(space => 
-                        space.key.toLowerCase().includes(searchTerm) ||
-                        space.name.toLowerCase().includes(searchTerm) ||
-                        space.description?.plain?.value?.toLowerCase().includes(searchTerm)
+                    .filter(space =>
+                        space.key.toLowerCase().includes(searchTerm)
+                        || space.name.toLowerCase().includes(searchTerm)
+                        || space.description?.plain?.value?.toLowerCase().includes(searchTerm)
                     )
                     .map(space => ({
                         name: this.formatSpaceChoice(space),
@@ -110,33 +99,33 @@ export class InteractiveConfluenceCLI {
                     }));
             },
             pageSize: 15,
-            placeholder: 'Type to filter spaces...',
+            placeholder: "Type to filter spaces...",
         });
 
         if (spaceKeys.length === 0) {
-            console.log(chalk.yellow('No spaces selected'));
+            console.log(chalk.yellow("No spaces selected"));
             return;
         }
 
         // Get local paths for each selected space
         const localPaths: Record<string, string> = {};
-        const baseOutputDir = process.env.CONFLUENCE_OUTPUT_DIR || '';
-        
+        const baseOutputDir = process.env.CONFLUENCE_OUTPUT_DIR || "";
+
         for (const spaceKey of spaceKeys) {
             const space = newSpaces.find(s => s.key === spaceKey)!;
             const defaultPath = path.join(baseOutputDir, space.key.toLowerCase());
-            const suggestedPath = path.join(baseOutputDir, space.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
-            
+            const suggestedPath = path.join(baseOutputDir, space.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"));
+
             const localPath = await selectSingle({
                 message: `Enter local directory name for ${chalk.cyan(space.key)} (${space.name}):`,
                 choices: [
                     { name: defaultPath, value: space.key.toLowerCase() },
-                    { name: suggestedPath, value: space.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') },
-                    { name: 'Custom...', value: 'custom' },
+                    { name: suggestedPath, value: space.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") },
+                    { name: "Custom...", value: "custom" },
                 ],
             });
 
-            if (localPath === 'custom') {
+            if (localPath === "custom") {
                 // TODO: Add custom input prompt when @inquirer/prompts adds input support
                 // For now, use the space key
                 localPaths[spaceKey] = space.key.toLowerCase();
@@ -154,7 +143,7 @@ export class InteractiveConfluenceCLI {
         // Ask if user wants to sync now
         if (spaceKeys.length > 0) {
             const syncNow = await confirm({
-                message: `Would you like to sync ${spaceKeys.length > 1 ? 'these spaces' : 'this space'} now?`,
+                message: `Would you like to sync ${spaceKeys.length > 1 ? "these spaces" : "this space"} now?`,
                 default: true,
             });
 
@@ -171,12 +160,12 @@ export class InteractiveConfluenceCLI {
     private async removeSpace(): Promise<void> {
         const spaces = await this.library.listSpaces();
         if (spaces.length === 0) {
-            console.log(chalk.yellow('No spaces in library'));
+            console.log(chalk.yellow("No spaces in library"));
             return;
         }
 
         const singleSpaceKey = await selectSingle({
-            message: 'Select space to remove:',
+            message: "Select space to remove:",
             choices: spaces.map(space => ({
                 name: `${space.spaceKey} (${space.localPath})`,
                 value: space.spaceKey,
@@ -184,7 +173,9 @@ export class InteractiveConfluenceCLI {
         });
 
         const shouldRemove = await confirm({
-            message: chalk.yellow(`Are you sure you want to remove ${singleSpaceKey}? This will delete all local files.`),
+            message: chalk.yellow(
+                `Are you sure you want to remove ${singleSpaceKey}? This will delete all local files.`,
+            ),
             default: false,
         });
 
@@ -197,14 +188,16 @@ export class InteractiveConfluenceCLI {
     private async syncSpace(): Promise<void> {
         const spaces = await this.library.listSpaces();
         if (spaces.length === 0) {
-            console.log(chalk.yellow('No spaces in library'));
+            console.log(chalk.yellow("No spaces in library"));
             return;
         }
 
         const singleSpaceKey = await selectSingle({
-            message: 'Select space to sync:',
+            message: "Select space to sync:",
             choices: spaces.map(space => ({
-                name: `${space.spaceKey} (${space.localPath}) - Last sync: ${new Date(space.lastSync).toLocaleString()}`,
+                name: `${space.spaceKey} (${space.localPath}) - Last sync: ${
+                    new Date(space.lastSync).toLocaleString()
+                }`,
                 value: space.spaceKey,
             })),
         });
@@ -216,7 +209,7 @@ export class InteractiveConfluenceCLI {
     private async syncAllSpaces(): Promise<void> {
         const spaces = await this.library.listSpaces();
         if (spaces.length === 0) {
-            console.log(chalk.yellow('No spaces in library'));
+            console.log(chalk.yellow("No spaces in library"));
             return;
         }
 
@@ -226,39 +219,39 @@ export class InteractiveConfluenceCLI {
         });
 
         if (shouldSync) {
-            console.log(chalk.cyan('\nStarting sync of all spaces...'));
+            console.log(chalk.cyan("\nStarting sync of all spaces..."));
             await this.library.syncAll();
-            console.log(chalk.green('\nCompleted sync of all spaces'));
+            console.log(chalk.green("\nCompleted sync of all spaces"));
         }
     }
 
     private async handleAction(action: string): Promise<void> {
         switch (action) {
-            case 'show': {
+            case "show": {
                 const config = await this.library.getConfig();
-                console.log(chalk.cyan('\nConfiguration Location:'));
+                console.log(chalk.cyan("\nConfiguration Location:"));
                 console.log(this.library.configPath);
                 console.log();
-                console.log(chalk.cyan('Configuration Data:'));
+                console.log(chalk.cyan("Configuration Data:"));
                 console.log(JSON.stringify(config, null, 2));
                 console.log();
                 break;
             }
-            case 'list':
+            case "list":
                 await this.listSpaces();
                 break;
-            case 'add':
+            case "add":
                 await this.addSpace();
                 break;
-            case 'remove':
+            case "remove":
                 await this.removeSpace();
                 break;
-            case 'sync':
+            case "sync":
                 await this.syncSpace();
                 break;
-            case 'sync-all':
+            case "sync-all":
                 await this.syncAllSpaces();
                 break;
         }
     }
-} 
+}

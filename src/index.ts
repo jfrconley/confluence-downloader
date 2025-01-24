@@ -1,4 +1,4 @@
-export { ConfluenceClient } from './api-client.js';
-export { MarkdownConverter } from './markdown-converter.js';
-export { FileSystemHandler } from './fs-handler.js';
-export type { ConfluenceConfig, ConfluencePage, ConfluenceComment } from './types.js'; 
+export { ConfluenceClient } from "./api-client.js";
+export { FileSystemHandler } from "./fs-handler.js";
+export { MarkdownConverter } from "./markdown-converter.js";
+export type { ConfluenceComment, ConfluenceConfig, ConfluencePage } from "./types.js";

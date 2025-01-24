@@ -1,17 +1,11 @@
-import fs from 'fs-extra';
-import path from 'path';
-import { ConfluenceClient } from './api-client.js';
-import { MarkdownConverter } from './markdown-converter.js';
-import { FileSystemHandler } from './fs-handler.js';
-import cliProgress from 'cli-progress';
-import chalk from 'chalk';
-import type {
-    LibraryOptions,
-    ConfluenceLibraryConfig,
-    SpaceConfig,
-    SpaceMetadata,
-    SpaceInfo,
-} from './types.js';
+import chalk from "chalk";
+import cliProgress from "cli-progress";
+import fs from "fs-extra";
+import path from "path";
+import { ConfluenceClient } from "./api-client.js";
+import { FileSystemHandler } from "./fs-handler.js";
+import { MarkdownConverter } from "./markdown-converter.js";
+import type { ConfluenceLibraryConfig, LibraryOptions, SpaceConfig, SpaceInfo, SpaceMetadata } from "./types.js";
 
 export class ConfluenceLibrary {
     public readonly configPath: string;
@@ -27,11 +21,11 @@ export class ConfluenceLibrary {
         this.configDir = path.dirname(options.configPath);
         this.baseUrl = options.baseUrl;
         this.apiToken = options.apiToken;
-        
+
         this.progressBar = new cliProgress.SingleBar({
             format: `{space} [{bar}] {percentage}% | {status}`,
-            barCompleteChar: '=',
-            barIncompleteChar: '-',
+            barCompleteChar: "=",
+            barIncompleteChar: "-",
             hideCursor: true,
             clearOnComplete: true,
             stopOnComplete: true,
@@ -40,8 +34,8 @@ export class ConfluenceLibrary {
         this.client = new ConfluenceClient({
             baseUrl: this.baseUrl,
             apiToken: this.apiToken,
-            spaceKey: '',
-            outputDir: '',
+            spaceKey: "",
+            outputDir: "",
         });
     }
 
@@ -56,7 +50,7 @@ export class ConfluenceLibrary {
     }
 
     private async loadConfig(): Promise<ConfluenceLibraryConfig> {
-        const content = await fs.readFile(this.configPath, 'utf8');
+        const content = await fs.readFile(this.configPath, "utf8");
         return JSON.parse(content);
     }
 
@@ -69,7 +63,7 @@ export class ConfluenceLibrary {
     }
 
     private async saveSpaceMetadata(spacePath: string, metadata: SpaceMetadata): Promise<void> {
-        const metadataPath = path.join(spacePath, 'space.json');
+        const metadataPath = path.join(spacePath, "space.json");
         await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
     }
 
@@ -82,15 +76,15 @@ export class ConfluenceLibrary {
         const client = new ConfluenceClient({
             baseUrl: this.baseUrl,
             apiToken: this.apiToken,
-            spaceKey: '',
-            outputDir: '',
+            spaceKey: "",
+            outputDir: "",
         });
         return client.getAllSpaces();
     }
 
     async addSpace(spaceKey: string, localPath: string): Promise<void> {
         const config = await this.loadConfig();
-            
+
         // Check if space already exists
         if (config.spaces.some(s => s.spaceKey === spaceKey)) {
             throw new Error(`Space ${spaceKey} already exists in library`);
@@ -128,7 +122,7 @@ export class ConfluenceLibrary {
     async removeSpace(spaceKey: string): Promise<void> {
         const config = await this.loadConfig();
         const spaceIndex = config.spaces.findIndex(s => s.spaceKey === spaceKey);
-        
+
         if (spaceIndex === -1) {
             throw new Error(`Space ${spaceKey} not found in library`);
         }
@@ -147,7 +141,7 @@ export class ConfluenceLibrary {
     async syncSpace(spaceKey: string): Promise<void> {
         const config = await this.loadConfig();
         const space = config.spaces.find(s => s.spaceKey === spaceKey);
-        
+
         if (!space) {
             throw new Error(`Space ${spaceKey} not found in library`);
         }
@@ -170,12 +164,12 @@ export class ConfluenceLibrary {
         // Initialize progress bar
         this.progressBar.start(100, 0, {
             space: chalk.cyan(spaceKey),
-            status: 'Initializing...',
+            status: "Initializing...",
         });
 
         try {
             // Get space info (5%)
-            this.progressBar.update(0, { status: 'Fetching space info...' });
+            this.progressBar.update(0, { status: "Fetching space info..." });
             const spaceInfo = await client.getSpaceInfo();
             const metadata: SpaceMetadata = {
                 key: spaceKey,
@@ -187,7 +181,7 @@ export class ConfluenceLibrary {
             this.progressBar.update(5);
 
             // Setup components (5%)
-            this.progressBar.update(5, { status: 'Setting up...' });
+            this.progressBar.update(5, { status: "Setting up..." });
             const converter = new MarkdownConverter();
             const fsHandler = new FileSystemHandler(spacePath);
             this.progressBar.update(10);
@@ -205,13 +199,13 @@ export class ConfluenceLibrary {
                 // Process pages in concurrent batches
                 for (let i = 0; i < pages.length; i += batchSize * concurrency) {
                     const batchPromises = [];
-                    
+
                     // Create concurrent batch promises
                     for (let j = 0; j < concurrency && i + j * batchSize < pages.length; j++) {
                         const start = i + j * batchSize;
                         const end = Math.min(start + batchSize, pages.length);
                         const batch = pages.slice(start, end);
-                        
+
                         batchPromises.push((async () => {
                             const results = await Promise.all(batch.map(async (page) => {
                                 try {
@@ -226,13 +220,13 @@ export class ConfluenceLibrary {
                                     return { success: false, page };
                                 }
                             }));
-                            
+
                             completed += results.length;
                             const progress = 40 + Math.round((completed / totalPages) * 60);
-                            this.progressBar.update(progress, { 
+                            this.progressBar.update(progress, {
                                 status: `Writing pages... (${completed}/${totalPages})`,
                             });
-                            
+
                             return results;
                         })());
                     }
@@ -244,13 +238,13 @@ export class ConfluenceLibrary {
             // Update last sync time
             space.lastSync = new Date().toISOString();
             await this.saveConfig(config);
-            
+
             // Complete
-            this.progressBar.update(100, { status: chalk.green('Completed') });
-            
+            this.progressBar.update(100, { status: chalk.green("Completed") });
+
             // Report any errors after progress bar is done
             if (this.errors.length > 0) {
-                console.log(chalk.yellow('\nWarnings/Errors:'));
+                console.log(chalk.yellow("\nWarnings/Errors:"));
                 this.errors.forEach(error => console.log(chalk.yellow(`- ${error}`)));
                 this.errors = [];
             }
@@ -265,11 +259,10 @@ export class ConfluenceLibrary {
 
     async syncAll(): Promise<void> {
         const spaces = await this.listSpaces();
-        const totalSpaces = spaces.length;
-        
+
         for (let i = 0; i < spaces.length; i++) {
             const space = spaces[i];
             await this.syncSpace(space.spaceKey);
         }
     }
-} 
+}
