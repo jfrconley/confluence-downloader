@@ -1,4 +1,4 @@
-import fs from "fs-extra";
+import { appendFile, mkdir } from "fs/promises";
 import path from "path";
 import { pipeline, Readable, Transform } from "stream";
 import { promisify } from "util";
@@ -46,7 +46,9 @@ export class ConfluenceClient {
             this.logFile = path.join(config.outputDir, `confluence-fetch-${timestamp}.log`);
 
             // Ensure output directory exists before trying to create log file
-            fs.ensureDirSync(config.outputDir);
+            mkdir(config.outputDir, { recursive: true }).catch(error => {
+                console.error("Failed to create output directory:", error);
+            });
 
             // Initialize log file
             this.log("Confluence client initialized", {
@@ -68,7 +70,7 @@ export class ConfluenceClient {
         }
         const timestamp = new Date().toISOString();
         const logEntry = `[${timestamp}] ${message}\n${data ? JSON.stringify(data, null, 2) + "\n" : ""}`;
-        await fs.appendFile(this.logFile, logEntry);
+        await appendFile(this.logFile, logEntry);
     }
 
     private async fetchJson<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {

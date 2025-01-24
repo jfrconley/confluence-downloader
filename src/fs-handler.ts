@@ -1,4 +1,4 @@
-import fs from "fs-extra";
+import { mkdir, rm, writeFile } from "fs/promises";
 import path from "path";
 import type { ConfluencePage } from "./types.js";
 
@@ -7,8 +7,8 @@ export class FileSystemHandler {
 
     async writePage(page: ConfluencePage, content: string): Promise<void> {
         const filePath = this.getFilePath(page);
-        await fs.ensureDir(path.dirname(filePath));
-        await fs.writeFile(filePath, content, "utf8");
+        await mkdir(path.dirname(filePath), { recursive: true });
+        await writeFile(filePath, content, "utf8");
     }
 
     private getFilePath(page: ConfluencePage): string {
@@ -37,6 +37,7 @@ export class FileSystemHandler {
     }
 
     async clean(): Promise<void> {
-        await fs.emptyDir(this.outputDir);
+        await rm(this.outputDir, { recursive: true, force: true });
+        await mkdir(this.outputDir, { recursive: true });
     }
 }
