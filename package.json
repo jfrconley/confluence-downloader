@@ -1,6 +1,7 @@
 {
   "name": "@jfconley/confluence-downloader",
-  "version": "0.0.0",
+  "version": "0.0.1",
+  "private": false,
   "description": "Downloads Confluence spaces and converts to markdown",
   "type": "module",
   "main": "dist/index.js",
@@ -33,7 +34,7 @@
     "prepare": "husky install && ts-patch install -s",
     "lint": "dprint check && eslint --cache .",
     "lint:fix": "dprint fmt && eslint --cache --fix .",
-    "clean": "git clean -Xdf --exclude=\"!node_modules/**/*\" --exclude=\"!node_modules\" --exclude=\"!.idea\" --exclude=\"!.idea/**/*\" --exclude=\"!.husky\" --exclude=\"!.husky/**/*\"",
+    "clean": "git clean -Xdf --exclude=\"!node_modules/**/*\" --exclude=\"!node_modules\" --exclude=\"!.idea\" --exclude=\"!.idea/**/*\" --exclude=\"!.husky\" --exclude=\"!.husky/**/*\" --exclude=\"!.env\"",
     "compile": "tsc",
     "test": "vitest --reporter=junit --reporter=basic --outputFile.junit=coverage/junit.xml",
     "release": "pnpm clean && pnpm build && pnpm lint && changeset publish",

@@ -7,3 +7,5 @@ coverage
 reports
 cdktf.out
 .eslintcache
+.idea
+.env
