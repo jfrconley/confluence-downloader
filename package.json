@@ -1,5 +1,5 @@
 {
-  "name": "confluence-downloader",
+  "name": "@jfconley/confluence-downloader",
   "version": "0.0.0",
   "description": "Downloads Confluence spaces and converts to markdown",
   "type": "module",
