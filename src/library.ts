@@ -4,6 +4,7 @@ import fs from "fs-extra";
 import path from "path";
 import { ConfluenceClient } from "./api-client.js";
 import { FileSystemHandler } from "./fs-handler.js";
+import Logger from "./logger.js";
 import { MarkdownConverter } from "./markdown-converter.js";
 import type { ConfluenceLibraryConfig, LibraryOptions, SpaceConfig, SpaceInfo, SpaceMetadata } from "./types.js";
 
@@ -37,6 +38,8 @@ export class ConfluenceLibrary {
             spaceKey: "",
             outputDir: "",
         });
+
+        Logger.info("library", `ConfluenceLibrary initialized with config path: ${this.configPath}`);
     }
 
     async initialize(): Promise<void> {
@@ -292,6 +295,7 @@ export class ConfluenceLibrary {
             // Report any errors that occurred during processing
             if (this.errors.length > 0) {
                 console.log(chalk.yellow(`\nWarnings/Errors (${this.errors.length}):`));
+                Logger.warn("library", `Found ${this.errors.length} warnings/errors during sync`);
 
                 // Group errors by type to make them more readable
                 const errorsByType: Record<string, string[]> = {};
@@ -312,16 +316,24 @@ export class ConfluenceLibrary {
                         errorsByType[errorType] = [];
                     }
                     errorsByType[errorType].push(error);
+
+                    // Log to debug logger
+                    Logger.warn("library", error);
                 });
 
                 // Print errors grouped by type
                 Object.entries(errorsByType).forEach(([type, errors]) => {
                     console.log(chalk.yellow(`\n${type} (${errors.length}):`));
+                    Logger.warn("library", `${type} (${errors.length})`);
 
                     // If there are many errors of the same type, summarize
                     if (errors.length > 10) {
-                        errors.slice(0, 5).forEach(error => console.log(chalk.yellow(`- ${error}`)));
+                        errors.slice(0, 5).forEach(error => {
+                            console.log(chalk.yellow(`- ${error}`));
+                            Logger.warn("library", `${type}: ${error}`);
+                        });
                         console.log(chalk.yellow(`- ... and ${errors.length - 5} more similar errors`));
+                        Logger.warn("library", `... and ${errors.length - 5} more similar errors`);
 
                         // Provide troubleshooting advice based on error type
                         if (type === "DOM Element Error") {
@@ -330,9 +342,14 @@ export class ConfluenceLibrary {
                                 chalk.cyan("- This is likely due to DOM API differences between browsers and Node.js"),
                             );
                             console.log(chalk.cyan("- Check the debug.log file for more details on specific pages"));
+
+                            Logger.info("library", "Troubleshooting advice provided for DOM Element Errors");
                         }
                     } else {
-                        errors.forEach(error => console.log(chalk.yellow(`- ${error}`)));
+                        errors.forEach(error => {
+                            console.log(chalk.yellow(`- ${error}`));
+                            Logger.warn("library", `${type}: ${error}`);
+                        });
                     }
                 });
 
@@ -342,11 +359,11 @@ export class ConfluenceLibrary {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             this.progressBar.update(100, { status: chalk.red(`Error: ${errorMessage}`) });
+            Logger.error("library", "Error syncing space", error);
             throw error;
         } finally {
             this.progressBar.stop();
-            // Properly close the debug file stream
-            debugStream.end();
+            // No need to close debug stream here, we're using our new logger
         }
     }
 

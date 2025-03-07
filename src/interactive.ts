@@ -4,6 +4,7 @@ import { select } from "inquirer-select-pro";
 import path from "path";
 import readline from "readline";
 import { ConfluenceLibrary } from "./library.js";
+import Logger from "./logger.js";
 import type { SpaceInfo } from "./types.js";
 
 export class InteractiveConfluenceCLI {
@@ -11,6 +12,7 @@ export class InteractiveConfluenceCLI {
 
     constructor(library: ConfluenceLibrary) {
         this.library = library;
+        Logger.info("interactive", "InteractiveConfluenceCLI initialized");
     }
 
     async start(): Promise<void> {
@@ -43,6 +45,7 @@ export class InteractiveConfluenceCLI {
 
             if (action === "exit") {
                 console.log("\nGoodbye!");
+                Logger.info("interactive", "User exited interactive mode");
                 break;
             }
 
@@ -68,18 +71,27 @@ export class InteractiveConfluenceCLI {
         const spaces = await this.library.listSpaces();
         if (spaces.length === 0) {
             console.log(chalk.yellow("No spaces in library"));
+            Logger.info("interactive", "No spaces in library");
             return;
         }
 
         console.log(chalk.bold("\nSpaces in library:"));
+        Logger.info("interactive", `Listing ${spaces.length} spaces`);
         spaces.forEach(space => {
             console.log(chalk.cyan(`\n${space.spaceKey} (${space.localPath})`));
             console.log(`Last synced: ${new Date(space.lastSync).toLocaleString()}`);
+            Logger.debug(
+                "interactive",
+                `Space: ${space.spaceKey} (${space.localPath}), Last synced: ${
+                    new Date(space.lastSync).toLocaleString()
+                }`,
+            );
         });
     }
 
     private async addSpace(): Promise<void> {
         console.log(chalk.cyan("Fetching available spaces from Confluence..."));
+        Logger.info("interactive", "Fetching available spaces from Confluence");
         const availableSpaces = await this.library.getAvailableSpaces();
         const existingSpaces = await this.library.listSpaces();
 
@@ -90,6 +102,7 @@ export class InteractiveConfluenceCLI {
 
         if (newSpaces.length === 0) {
             console.log(chalk.yellow("No new spaces available to add"));
+            Logger.info("interactive", "No new spaces available to add");
             return;
         }
 
@@ -119,6 +132,7 @@ export class InteractiveConfluenceCLI {
 
         if (spaceKeys.length === 0) {
             console.log(chalk.yellow("No spaces selected"));
+            Logger.info("interactive", "No spaces selected for addition");
             return;
         }
 
@@ -153,6 +167,7 @@ export class InteractiveConfluenceCLI {
         for (const spaceKey of spaceKeys) {
             await this.library.addSpace(spaceKey, localPaths[spaceKey]);
             console.log(chalk.green(`Added space ${spaceKey}`));
+            Logger.info("interactive", `Added space ${spaceKey}`);
         }
 
         // Ask if user wants to sync now
@@ -165,8 +180,10 @@ export class InteractiveConfluenceCLI {
             if (syncNow) {
                 for (const spaceKey of spaceKeys) {
                     console.log(chalk.cyan(`\nSyncing space ${spaceKey}...`));
+                    Logger.info("interactive", `Starting sync of space ${spaceKey}`);
                     await this.library.syncSpace(spaceKey);
                     console.log(chalk.green(`Synced space ${spaceKey}`));
+                    Logger.info("interactive", `Completed sync of space ${spaceKey}`);
                 }
             }
         }
@@ -176,6 +193,7 @@ export class InteractiveConfluenceCLI {
         const spaces = await this.library.listSpaces();
         if (spaces.length === 0) {
             console.log(chalk.yellow("No spaces in library"));
+            Logger.info("interactive", "No spaces in library to remove");
             return;
         }
 
@@ -197,6 +215,7 @@ export class InteractiveConfluenceCLI {
         if (shouldRemove) {
             await this.library.removeSpace(singleSpaceKey);
             console.log(chalk.green(`Removed space ${singleSpaceKey}`));
+            Logger.info("interactive", `Removed space ${singleSpaceKey}`);
         }
     }
 
@@ -217,14 +236,18 @@ export class InteractiveConfluenceCLI {
             })),
         });
 
+        console.log(chalk.cyan(`\nSyncing space ${singleSpaceKey}...`));
+        Logger.info("interactive", `Starting sync of space ${singleSpaceKey}`);
         await this.library.syncSpace(singleSpaceKey);
         console.log(chalk.green(`Synced space ${singleSpaceKey}`));
+        Logger.info("interactive", `Completed sync of space ${singleSpaceKey}`);
     }
 
     private async syncAllSpaces(): Promise<void> {
         const spaces = await this.library.listSpaces();
         if (spaces.length === 0) {
             console.log(chalk.yellow("No spaces in library"));
+            Logger.info("interactive", "No spaces in library to sync");
             return;
         }
 
@@ -235,12 +258,15 @@ export class InteractiveConfluenceCLI {
 
         if (shouldSync) {
             console.log(chalk.cyan("\nStarting sync of all spaces..."));
+            Logger.info("interactive", "Starting sync of all spaces");
             await this.library.syncAll();
             console.log(chalk.green("\nCompleted sync of all spaces"));
+            Logger.info("interactive", "Completed sync of all spaces");
         }
     }
 
     private async handleAction(action: string): Promise<void> {
+        Logger.info("interactive", `Handling action: ${action}`);
         switch (action) {
             case "show": {
                 const config = await this.library.getConfig();
@@ -250,6 +276,7 @@ export class InteractiveConfluenceCLI {
                 console.log(chalk.cyan("Configuration Data:"));
                 console.log(JSON.stringify(config, null, 2));
                 console.log();
+                Logger.debug("interactive", "Showing configuration", { path: this.library.configPath, config });
                 break;
             }
             case "list":

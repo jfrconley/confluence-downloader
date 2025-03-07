@@ -6,6 +6,11 @@ export interface ConfluenceConfig {
     concurrency?: number;
     onProgress?: (status: string) => void;
     enableLogging?: boolean;
+    debugOptions?: {
+        logToFile?: boolean;
+        logFilePath?: string;
+        logDir?: string;
+    };
 }
 
 export interface ConfluenceLabel {

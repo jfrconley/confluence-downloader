@@ -2,6 +2,7 @@ import { appendFile, mkdir } from "fs/promises";
 import path from "path";
 import { pipeline, Readable, Transform } from "stream";
 import { promisify } from "util";
+import Logger from "./logger.js";
 import type { ConfluenceComment, ConfluenceConfig, ConfluencePage } from "./types.js";
 
 interface SpaceInfo {
@@ -39,15 +40,15 @@ export class ConfluenceClient {
             "Content-Type": "application/json",
         };
 
-        // Only set up logging if explicitly enabled and we have an output directory
+        // Only set up legacy logging if explicitly enabled and we have an output directory
         if (config.enableLogging && config.outputDir) {
-            // Set up logging
+            // Set up legacy logging
             const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
             this.logFile = path.join(config.outputDir, `confluence-fetch-${timestamp}.log`);
 
             // Ensure output directory exists before trying to create log file
             mkdir(config.outputDir, { recursive: true }).catch(error => {
-                console.error("Failed to create output directory:", error);
+                Logger.error("api", "Failed to create output directory", error);
             });
 
             // Initialize log file
@@ -56,11 +57,18 @@ export class ConfluenceClient {
                 spaceKey: this.spaceKey,
                 concurrency: this.concurrency,
             }).catch(error => {
-                console.error("Failed to write to log file:", error);
+                Logger.error("api", "Failed to write to log file", error);
             });
         } else {
             this.logFile = "";
         }
+
+        // Log initialization with new debug logger
+        Logger.info("api", "Confluence client initialized", {
+            baseUrl: this.baseUrl,
+            spaceKey: this.spaceKey,
+            concurrency: this.concurrency,
+        });
     }
 
     private async log(message: string, data?: Record<string, unknown>): Promise<void> {
@@ -505,9 +513,16 @@ export class ConfluenceClient {
                 }
             }
 
+            // Also log with the new logger
+            Logger.debug("api", `Retrieved ${response.results.length} comments for page ${pageId}`);
+
+            if (response.results.length > 0) {
+                Logger.trace("api", "Sample comment structure", this.truncateForLog(response.results[0]));
+            }
+
             return response.results;
         } catch (error) {
-            console.error(`Error fetching comments for page ${pageId}:`, error);
+            Logger.error("api", `Error fetching comments for page ${pageId}`, error);
             return [];
         }
     }

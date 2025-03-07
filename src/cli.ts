@@ -7,6 +7,7 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import { InteractiveConfluenceCLI } from "./interactive.js";
 import { ConfluenceLibrary } from "./library.js";
+import Logger from "./logger.js";
 import type { ConfluenceConfig } from "./types.js";
 
 // Load environment variables
@@ -23,6 +24,8 @@ interface CliArgs {
     localPath?: string;
     outputDir?: string;
     email?: string;
+    debug?: boolean;
+    debugLogPath?: string;
 }
 
 async function main() {
@@ -47,9 +50,20 @@ async function main() {
                 description: "Path to confluence.json config file",
                 demandOption: true,
             },
+            debug: {
+                alias: "d",
+                type: "boolean",
+                description: "Enable debug logging to file",
+                default: false,
+            },
+            debugLogPath: {
+                type: "string",
+                description: "Path for debug log file (defaults to current directory)",
+            },
         })
         .command("$0", "Start interactive mode", {}, async (argv) => {
             const args = argv as unknown as CliArgs;
+
             const library = new ConfluenceLibrary({
                 baseUrl: args.base,
                 apiToken: args.token,
@@ -139,6 +153,15 @@ async function main() {
         .help()
         .parse();
 
+    // Initialize logger if debug flag is set
+    if (argv.debug) {
+        Logger.init({
+            logToFile: true,
+            logFilePath: argv.debugLogPath as string | undefined,
+        });
+        Logger.info("cli", "Debug logging enabled");
+    }
+
     const command = argv._[0];
 
     switch (command) {
@@ -153,6 +176,7 @@ async function main() {
             });
             await library.initialize();
             console.log(`Initialized Confluence library in ${rootDir}`);
+            Logger.info("cli", `Initialized Confluence library in ${rootDir}`);
             break;
         }
 
@@ -165,6 +189,7 @@ async function main() {
             const localPath = argv.localPath || argv.spaceKey;
             await library.addSpace(argv.spaceKey as string, localPath as string);
             console.log(`Added space ${argv.spaceKey} to library`);
+            Logger.info("cli", `Added space ${argv.spaceKey} to library`);
             break;
         }
 
@@ -176,6 +201,7 @@ async function main() {
             });
             await library.removeSpace(argv.spaceKey as string);
             console.log(`Removed space ${argv.spaceKey} from library`);
+            Logger.info("cli", `Removed space ${argv.spaceKey} from library`);
             break;
         }
 
@@ -187,9 +213,16 @@ async function main() {
             });
             const spaces = await library.listSpaces();
             console.log("Spaces in library:");
+            Logger.info("cli", `Listing ${spaces.length} spaces in library`);
             spaces.forEach(space => {
                 console.log(`- ${space.spaceKey} (${space.localPath})`);
                 console.log(`  Last synced: ${new Date(space.lastSync).toLocaleString()}`);
+                Logger.debug(
+                    "cli",
+                    `Space: ${space.spaceKey} (${space.localPath}), Last synced: ${
+                        new Date(space.lastSync).toLocaleString()
+                    }`,
+                );
             });
             break;
         }
@@ -203,9 +236,11 @@ async function main() {
             if (argv.spaceKey) {
                 await library.syncSpace(argv.spaceKey as string);
                 console.log(`Synced space ${argv.spaceKey}`);
+                Logger.info("cli", `Synced space ${argv.spaceKey}`);
             } else {
                 await library.syncAll();
                 console.log("Synced all spaces");
+                Logger.info("cli", "Synced all spaces");
             }
             break;
         }
@@ -256,12 +291,17 @@ async function main() {
             console.log();
             console.log(chalk.cyan("Configuration Data:"));
             console.log(JSON.stringify(config, null, 2));
+            Logger.debug("cli", "Showing configuration", { path: library.configPath, config });
             break;
         }
     }
 }
 
-main().catch((error: Error) => {
-    console.error("Error:", error.message);
-    process.exit(1);
+// Call main at the end
+main().catch((error) => {
+    console.error(chalk.red("Error:"), error);
+    Logger.error("cli", "Unhandled error", error);
+}).finally(() => {
+    // Ensure logger is closed properly
+    Logger.close();
 });

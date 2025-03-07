@@ -3,6 +3,7 @@
 // Disable linting for parameters prefixed with underscore as they are required by interface but not used
 import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
+import Logger from "./logger.js";
 import type { ConfluenceComment, ConfluencePage, EnrichedComment } from "./types.js";
 
 // Define a base interface for DOM-like nodes
@@ -201,11 +202,12 @@ class HtmlTableHandler implements MacroHandler {
     }
 
     handle(node: DOMElement | TurndownNode, _page: ConfluencePage, turndownService: TurndownService): string {
-        // console.log('Processing table:', node.nodeName);
+        // Debug logging for table processing
+        Logger.trace("converter", "Processing table:", { nodeName: node.nodeName });
 
-        // Check if this is a Confluence table
+        // Determine if this is a Confluence table
         const isConfluenceTable = getAttribute(node, "class")?.includes("confluenceTable") || false;
-        // console.log('Is Confluence table:', isConfluenceTable);
+        Logger.trace("converter", "Is Confluence table:", { isConfluenceTable });
 
         // For Confluence tables, we need to look for tbody first
         let rowsContainer = node;
@@ -213,16 +215,16 @@ class HtmlTableHandler implements MacroHandler {
             const tbody = querySelector(node, "tbody");
             if (tbody) {
                 rowsContainer = tbody;
-                // console.log('Found tbody in Confluence table');
+                Logger.trace("converter", "Found tbody in Confluence table");
             }
         }
 
         // Extract rows from table
         const rows = Array.from(querySelectorAll(rowsContainer, "tr"));
-        // console.log(`Found ${rows.length} rows in table`);
+        Logger.trace("converter", `Found ${rows.length} rows in table`);
 
         if (rows.length === 0) {
-            // console.log('No rows found in table, returning empty string');
+            Logger.trace("converter", "No rows found in table, returning empty string");
             return "";
         }
 
@@ -231,7 +233,7 @@ class HtmlTableHandler implements MacroHandler {
         // Process table rows
         rows.forEach((row, rowIndex) => {
             const cells = Array.from(querySelectorAll(row, "th, td"));
-            // console.log(`Row ${rowIndex}: Found ${cells.length} cells`);
+            Logger.trace("converter", `Row ${rowIndex}: Found ${cells.length} cells`);
 
             let rowContent = "|";
 
@@ -251,7 +253,10 @@ class HtmlTableHandler implements MacroHandler {
                         cellContent = Array.from(pTags)
                             .map(p => p.innerHTML?.trim() || p.textContent?.trim() || "")
                             .join("<br>");
-                        // console.log(`Cell ${rowIndex}:${cellIndex} - Found ${pTags.length} p tags with combined content length: ${cellContent.length}`);
+                        Logger.trace(
+                            "converter",
+                            `Cell ${rowIndex}:${cellIndex} - Found ${pTags.length} p tags with combined content length: ${cellContent.length}`,
+                        );
                     }
                 }
 
@@ -265,10 +270,13 @@ class HtmlTableHandler implements MacroHandler {
                 // Ensure we have at least a space for empty cells
                 if (!cellContent) {
                     cellContent = " ";
-                    // console.log(`Cell ${rowIndex}:${cellIndex} - Empty cell, using space character`);
+                    Logger.trace("converter", `Cell ${rowIndex}:${cellIndex} - Empty cell, using space character`);
                 }
 
-                // console.log(`Cell ${rowIndex}:${cellIndex} (${isHeader ? 'TH' : 'TD'}): Content length: ${cellContent.length}`);
+                Logger.trace(
+                    "converter",
+                    `Cell ${rowIndex}:${cellIndex} (${isHeader ? "TH" : "TD"}): Content length: ${cellContent.length}`,
+                );
 
                 // Use turndown to convert any HTML within the cell
                 const markdownContent = turndownService.turndown(cellContent).replace(/\n/g, "<br>");
@@ -287,7 +295,7 @@ class HtmlTableHandler implements MacroHandler {
             }
         });
 
-        // console.log('Generated markdown table:', markdownTable);
+        Logger.trace("converter", "Generated markdown table:", { markdownTable });
         return markdownTable;
     }
 }
@@ -314,9 +322,9 @@ class PanelMacroHandler implements MacroHandler {
 // Code Block Macro Handler
 class CodeBlockMacroHandler implements MacroHandler {
     canHandle(node: DOMElement | TurndownNode): boolean {
-        return node.nodeName === "AC:STRUCTURED-MACRO"
-                && getAttribute(node, "ac:name") === "code"
-            || getAttribute(node, "ac:name") === "codeblock";
+        const isConfluenceTable = getAttribute(node, "class")?.includes("confluenceTable") || false;
+        Logger.trace("converter", "Found Confluence table with class:", { class: getAttribute(node, "class") });
+        return isConfluenceTable;
     }
 
     handle(node: DOMElement | TurndownNode, _page: ConfluencePage, _turndownService: TurndownService): string {
@@ -616,11 +624,10 @@ export class MarkdownConverter {
 
     private processComments(comments: ConfluenceComment[], inlineRefMap: Map<string, string>): EnrichedComment[] {
         // Debug log for inline references
-        if (process.env.DEBUG) {
-            console.log(`Found ${inlineRefMap.size} inline comment references`);
-            if (inlineRefMap.size > 0) {
-                console.log("Reference IDs:", Array.from(inlineRefMap.keys()));
-            }
+        if (inlineRefMap.size > 0) {
+            Logger.debug("converter", `Found ${inlineRefMap.size} inline comment references`, {
+                referenceIds: Array.from(inlineRefMap.keys()),
+            });
         }
 
         return comments.map(comment => {
@@ -651,73 +658,68 @@ export class MarkdownConverter {
                 }
             }
 
-            // Detect if it's an inline comment and extract info
-            if (comment.extensions?.location === "inline") {
-                enriched.commentType = "inline";
-                if (process.env.DEBUG) console.log(`Processing inline comment: ${comment.id}`);
+            // Check if this is an inline comment
+            if (comment.extensions?.inlineProperties) {
+                Logger.debug("converter", `Processing inline comment: ${comment.id}`);
 
-                // First check if we have inlineProperties directly
-                if (comment.extensions.inlineProperties) {
-                    if (process.env.DEBUG) {
-                        console.log("Inline properties:", JSON.stringify(comment.extensions.inlineProperties));
+                // Set the comment type to inline
+                enriched.commentType = "inline";
+
+                // Log the inline properties for debugging
+                Logger.debug("converter", "Inline properties:", {
+                    inlineProperties: comment.extensions.inlineProperties,
+                });
+
+                // Get the reference ID from the inline properties
+                const refId = comment.extensions.inlineProperties.ref;
+                if (refId) {
+                    Logger.debug("converter", `Found reference ID: ${refId}`);
+                    enriched.referenceId = refId;
+
+                    // Look up the context text from our reference map
+                    if (inlineRefMap.has(refId)) {
+                        Logger.debug("converter", "Found reference in map", {
+                            refId,
+                            contextText: inlineRefMap.get(refId),
+                        });
+
+                        enriched.contextText = inlineRefMap.get(refId);
+                        Logger.debug("converter", `Context text from map: ${enriched.contextText}`);
+                    } else {
+                        // If we don't have the reference in our map, log it
+                        Logger.debug("converter", "Reference not found in map", {
+                            refId,
+                            availableRefs: Array.from(inlineRefMap.keys()),
+                        });
                     }
-                    // Check for either ref or markerRef property
-                    const refId = comment.extensions.inlineProperties.ref
-                        || comment.extensions.inlineProperties.markerRef;
-                    if (refId) {
-                        if (process.env.DEBUG) console.log(`Found reference ID: ${refId}`);
+                } else if (comment.extensions._expandable?.inlineProperties) {
+                    // Sometimes the inline properties are in the _expandable object
+                    Logger.debug("converter", "Extracting from expandable path");
+
+                    // Get the path to the inline properties
+                    const inlinePropertiesPath = comment.extensions._expandable.inlineProperties;
+                    Logger.debug("converter", `Expandable path: ${inlinePropertiesPath}`);
+
+                    // Try to extract the reference ID from the path
+                    const refIdMatch = inlinePropertiesPath.match(/ref=([^&]+)/);
+                    if (refIdMatch && refIdMatch[1]) {
+                        const refId = refIdMatch[1];
+                        Logger.debug("converter", `Found reference ID from expandable: ${refId}`);
                         enriched.referenceId = refId;
 
-                        // First try to use originalSelection if available
-                        if (comment.extensions.inlineProperties.originalSelection) {
-                            if (process.env.DEBUG) {
-                                console.log(
-                                    `Using originalSelection: ${comment.extensions.inlineProperties.originalSelection}`,
-                                );
-                            }
-                            enriched.contextText = comment.extensions.inlineProperties.originalSelection;
-                        } // Then try to get text from the reference map
-                        else {
-                            enriched.contextText = inlineRefMap.get(refId) || "";
-                            if (process.env.DEBUG) console.log(`Context text from map: ${enriched.contextText}`);
+                        if (inlineRefMap.has(refId)) {
+                            enriched.contextText = inlineRefMap.get(refId);
+                            Logger.debug("converter", `Context text from map: ${enriched.contextText}`);
                         }
-                    } // Even if we don't have a refId, we might have originalSelection
-                    else if (comment.extensions.inlineProperties.originalSelection) {
-                        if (process.env.DEBUG) {
-                            console.log(
-                                `Using originalSelection without refId: ${comment.extensions.inlineProperties.originalSelection}`,
-                            );
-                        }
-                        enriched.contextText = comment.extensions.inlineProperties.originalSelection;
                     }
-                } // If not, try to extract from expandable path
-                else if (comment.extensions?._expandable?.inlineProperties) {
-                    if (process.env.DEBUG) console.log("Extracting from expandable path");
-                    const inlinePropertiesPath = comment.extensions._expandable.inlineProperties;
-                    if (inlinePropertiesPath) {
-                        if (process.env.DEBUG) console.log(`Expandable path: ${inlinePropertiesPath}`);
-                        // Try to extract ref ID
-                        const refMatch = /ac:ref=([^&]+)/.exec(inlinePropertiesPath);
-                        if (refMatch && refMatch[1]) {
-                            const refId = refMatch[1];
-                            if (process.env.DEBUG) console.log(`Found reference ID from expandable: ${refId}`);
-                            enriched.referenceId = refId;
-                            // Find the referenced text
-                            enriched.contextText = inlineRefMap.get(refId) || "";
-                            if (process.env.DEBUG) console.log(`Context text from map: ${enriched.contextText}`);
-                        }
 
-                        // Try to extract originalSelection
-                        const selectionMatch = /originalSelection=([^&]+)/.exec(inlinePropertiesPath);
-                        if (selectionMatch && selectionMatch[1]) {
-                            const originalSelection = decodeURIComponent(selectionMatch[1]);
-                            if (process.env.DEBUG) {
-                                console.log(`Found originalSelection from expandable: ${originalSelection}`);
-                            }
-                            // Only use if we don't already have context text
-                            if (!enriched.contextText) {
-                                enriched.contextText = originalSelection;
-                            }
+                    // Try to extract the original selection from the path
+                    const originalSelectionMatch = inlinePropertiesPath.match(/originalSelection=([^&]+)/);
+                    if (originalSelectionMatch && originalSelectionMatch[1]) {
+                        const originalSelection = decodeURIComponent(originalSelectionMatch[1]);
+                        Logger.debug("converter", `Found originalSelection from expandable: ${originalSelection}`);
+                        if (!enriched.contextText) {
+                            enriched.contextText = originalSelection;
                         }
                     }
                 }
@@ -821,38 +823,34 @@ export class MarkdownConverter {
             let htmlContent = page.body.storage.value;
 
             // Pre-process HTML content to handle tables better
-            try {
-                // console.log('Pre-processing HTML content for tables');
-                // Create a temporary DOM element to manipulate the HTML
-                const tempDiv = new JSDOM(`<div>${htmlContent}</div>`).window.document.querySelector("div");
+            Logger.trace("converter", "Pre-processing HTML content for tables");
 
-                if (tempDiv) {
-                    // Find all Confluence tables
-                    const tables = tempDiv.querySelectorAll("table.confluenceTable");
-                    // console.log(`Found ${tables.length} Confluence tables for pre-processing`);
+            // Create a temporary DOM element to manipulate the HTML
+            const tempDiv = new JSDOM(`<div>${htmlContent}</div>`).window.document.querySelector("div");
 
-                    // Process each table to ensure it has proper structure
-                    tables.forEach((table, index) => {
-                        // console.log(`Pre-processing Confluence table ${index + 1}`);
+            if (tempDiv) {
+                // Find all Confluence tables
+                const tables = tempDiv.querySelectorAll("table.confluenceTable");
+                Logger.trace("converter", `Found ${tables.length} Confluence tables for pre-processing`);
 
-                        // Ensure all cells have proper content
-                        const cells = table.querySelectorAll("td, th");
-                        cells.forEach(cell => {
-                            // If a cell has empty content but has child elements, make sure they're properly formatted
-                            if (!cell.textContent?.trim() && cell.children.length > 0) {
-                                // console.log('Found empty cell with child elements, fixing');
-                                // Add a non-breaking space to ensure the cell isn't completely empty
-                                cell.innerHTML = cell.innerHTML + "&nbsp;";
-                            }
-                        });
+                // Process each table to ensure it has proper structure
+                tables.forEach((table, index) => {
+                    Logger.trace("converter", `Pre-processing Confluence table ${index + 1}`);
+
+                    // Ensure all cells have proper content
+                    const cells = table.querySelectorAll("td, th");
+                    cells.forEach(cell => {
+                        // If a cell has empty content but has child elements, make sure they're properly formatted
+                        if (!cell.textContent?.trim() && cell.children.length > 0) {
+                            Logger.trace("converter", "Found empty cell with child elements, fixing");
+                            // Add a non-breaking space to ensure the cell isn't completely empty
+                            cell.innerHTML = cell.innerHTML + "&nbsp;";
+                        }
                     });
+                });
 
-                    // Update the HTML content with our processed version
-                    htmlContent = tempDiv.innerHTML;
-                }
-            } catch (error) {
-                // console.error('Error pre-processing tables:', error);
-                // Continue with original HTML if pre-processing fails
+                // Update the HTML content with our processed version
+                htmlContent = tempDiv.innerHTML;
             }
 
             // Extract inline comment references

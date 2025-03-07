@@ -118,6 +118,42 @@ confluence-downloader sync-space \
 | `CONFLUENCE_EMAIL` | Your Confluence account email |
 | `CONFLUENCE_CONFIG` | Path to configuration file |
 | `CONFLUENCE_OUTPUT_DIR` | Default output directory for spaces |
+| `DEBUG` | Control debug output (e.g., `DEBUG=confluence-downloader:*`) |
+
+### Debug Logging
+
+The tool supports detailed debug logging using the [debug](https://github.com/debug-js/debug) library:
+
+```bash
+# Enable debug logging to file
+confluence-downloader <command> --debug
+
+# Specify custom log file path
+confluence-downloader <command> --debug --debugLogPath ./logs/debug.log
+
+# Filter specific components using the DEBUG environment variable
+DEBUG=confluence-downloader:api:* confluence-downloader <command>
+```
+
+Debug namespaces available:
+- `confluence-downloader:api:*` - API client operations
+- `confluence-downloader:converter:*` - Markdown conversion
+- `confluence-downloader:library:*` - Library management
+- `confluence-downloader:cli:*` - CLI operations
+- `confluence-downloader:interactive:*` - Interactive mode
+
+Severity levels:
+- `error` - Error messages
+- `warn` - Warnings
+- `info` - Informational messages
+- `debug` - Detailed debug information
+- `trace` - Verbose tracing information
+
+Example:
+```bash
+# Log only errors and warnings from the API client
+DEBUG=confluence-downloader:api:error,confluence-downloader:api:warn confluence-downloader sync
+```
 
 ### Configuration Files
 
