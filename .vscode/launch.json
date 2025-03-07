@@ -1,0 +1,55 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug CLI Sync Command",
+      "skipFiles": ["<node_internals>/**"],
+      "program": "${workspaceFolder}/dist/cli.js",
+      "args": [
+        "sync",
+        "--debug"
+      ],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "sourceMaps": true,
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "NODE_ENV": "development",
+        "DEBUG": "*"
+      },
+      "preLaunchTask": "npm: build"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug CLI Sync Specific Space",
+      "skipFiles": ["<node_internals>/**"],
+      "program": "${workspaceFolder}/dist/cli.js",
+      "envFile": "${workspaceFolder}/.env",
+      "args": [
+        "sync",
+        "--spaceKey", "${input:spaceKey}",
+        "--debug"
+      ],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "sourceMaps": true,
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "env": {
+        "NODE_ENV": "development",
+        "DEBUG": "*"
+      },
+      "preLaunchTask": "npm: build"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "spaceKey",
+      "type": "promptString",
+      "description": "Enter the Confluence space key to sync"
+    }
+  ]
+} 

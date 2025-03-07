@@ -118,8 +118,21 @@ export class ConfluenceLibrary {
             name: spaceInfo.name,
             description: spaceInfo.description?.plain?.value,
             lastSynced: new Date(0).toISOString(),
+            id: spaceInfo.id,
+            settings: spaceInfo.settings,
         };
         await this.saveSpaceMetadata(spacePath, metadata);
+    }
+
+    spaceMetadaFromInfo(info: SpaceInfo): SpaceMetadata {
+        return {
+            key: info.key,
+            name: info.name,
+            description: info.description?.plain?.value,
+            lastSynced: new Date(0).toISOString(),
+            id: info.id,
+            settings: info.settings,
+        };
     }
 
     async removeSpace(spaceKey: string): Promise<void> {
@@ -183,6 +196,8 @@ export class ConfluenceLibrary {
                 name: spaceInfo.name,
                 description: spaceInfo.description?.plain?.value,
                 lastSynced: new Date().toISOString(),
+                id: spaceInfo.id,
+                settings: spaceInfo.settings,
             };
             await this.saveSpaceMetadata(spacePath, metadata);
             this.progressBar.update(5);
@@ -194,7 +209,7 @@ export class ConfluenceLibrary {
             this.progressBar.update(10);
 
             // Get all pages (30%)
-            const pages = await client.getAllPages(spaceKey);
+            const pages = await client.getAllPages(spaceInfo);
 
             if (pages.length > 0) {
                 // Process pages (60%)

@@ -9,3 +9,5 @@ cdktf.out
 .eslintcache
 .idea
 .env
+*.png
+*.log

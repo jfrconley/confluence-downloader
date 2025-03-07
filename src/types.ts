@@ -219,6 +219,10 @@ export interface SpaceMetadata {
     name: string;
     description?: string;
     lastSynced: string;
+    id: number;
+    settings: {
+        status: string;
+    }
 }
 
 export interface SpaceConfig {
@@ -239,6 +243,7 @@ export interface LibraryOptions {
 }
 
 export interface SpaceInfo {
+    id: number;
     key: string;
     name: string;
     description?: {
@@ -246,4 +251,7 @@ export interface SpaceInfo {
             value: string;
         };
     };
+    settings: {
+        status: string;
+    }
 }

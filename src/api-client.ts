@@ -3,17 +3,7 @@ import path from "path";
 import { pipeline, Readable, Transform } from "stream";
 import { promisify } from "util";
 import Logger from "./logger.js";
-import type { ConfluenceComment, ConfluenceConfig, ConfluencePage } from "./types.js";
-
-interface SpaceInfo {
-    key: string;
-    name: string;
-    description?: {
-        plain: {
-            value: string;
-        };
-    };
-}
+import type { ConfluenceComment, ConfluenceConfig, ConfluencePage, SpaceInfo } from "./types.js";
 
 export class ConfluenceClient {
     private readonly baseUrl: string;
@@ -170,49 +160,56 @@ export class ConfluenceClient {
     async getSpaceInfo(spaceKey?: string): Promise<SpaceInfo> {
         const key = spaceKey || this.spaceKey;
         const response = await this.fetchJson<SpaceInfo>(`/rest/api/space/${key}`, {
-            expand: "description.plain",
+            expand: "description.plain,children.page,metadata,settings,homepage.descendants.page",
         });
         return response;
     }
 
     async getPageCount(spaceKey: string): Promise<number> {
-        this.config.onProgress?.("Counting total pages...");
+        const cql = `type=page and space='${spaceKey}'`;
         const response = await this.fetchJson<{
-            results: Array<{ id: string }>;
-            _links: {
-                next?: string;
-            };
-        }>("/api/v2/spaces", {
-            keys: spaceKey,
+            totalSize: number;
+        }>(`/rest/api/search`, {
+            cql,
+            limit: 1,
         });
+        return response.totalSize;
 
-        if (response.results.length === 0) {
-            return 0;
-        }
+        // this.config.onProgress?.("Counting total pages...");
+        // const response = await this.fetchJson<{
+        //     results: Array<{ id: string }>;
+        //     _links: {
+        //         next?: string;
+        //     };
+        // }>("/api/v2/spaces", {
+        //     keys: spaceKey,
+        // });
 
-        const spaceId = response.results[0].id;
-        let totalPages = 0;
-        let cursor: string | undefined;
+        // if (response.results.length === 0) {
+        //     return 0;
+        // }
 
-        do {
-            const pagesResponse = await this.fetchJson<{
-                results: Array<{ id: string }>;
-                _links: {
-                    next?: string;
-                };
-            }>(`/api/v2/spaces/${spaceId}/pages`, {
-                limit: 250,
-                ...(cursor ? { cursor } : {}),
-            });
+        // const spaceId = response.results[0].id;
+        // let totalPages = 0;
+        // let cursor: string | undefined;
 
-            totalPages += pagesResponse.results.length;
+        // do {
+        //     const pagesResponse = await this.fetchJson<{
+        //         results: Array<{ id: string }>;
+        //         _links: {
+        //             next?: string;
+        //         };
+        //     }>(`/api/v2/spaces/${spaceId}/pages`, {
+        //         limit: 250,
+        //         ...(cursor ? { cursor } : {}),
+        //     });
 
-            // Get cursor from next link if it exists
-            const nextLink = pagesResponse._links.next;
-            cursor = nextLink ? new URLSearchParams(nextLink.split("?")[1]).get("cursor") || undefined : undefined;
-        } while (cursor);
+        //     totalPages += pagesResponse.results.length;
 
-        return totalPages;
+        //     // Get cursor from next link if it exists
+        //     const nextLink = pagesResponse._links.next;
+        //     cursor = nextLink ? new URLSearchParams(nextLink.split("?")[1]).get("cursor") || undefined : undefined;
+        // } while (cursor);
     }
 
     async getAllSpaces(): Promise<SpaceInfo[]> {
@@ -240,34 +237,22 @@ export class ConfluenceClient {
         return spaces;
     }
 
-    async getAllPages(spaceKey: string): Promise<ConfluencePage[]> {
+    async getAllPages(space: SpaceInfo): Promise<ConfluencePage[]> {
         // First, get the total page count
         this.config.onProgress?.("Counting pages in space...");
-        const totalPages = await this.getPageCount(spaceKey);
+        const totalPages = await this.getPageCount(space.key);
         if (totalPages === 0) {
             this.config.onProgress?.("No pages found");
             return [];
         }
 
-        // Get space ID first
-        const spaceResponse = await this.fetchJson<{
-            results: Array<{ id: string }>;
-        }>("/api/v2/spaces", {
-            keys: spaceKey,
-        });
-
-        if (spaceResponse.results.length === 0) {
-            throw new Error(`Space ${spaceKey} not found`);
-        }
-
-        const spaceId = spaceResponse.results[0].id;
         const pages: ConfluencePage[] = [];
         let completedPages = 0;
 
         // Create the pipeline
         const pipelineAsync = promisify(pipeline);
         await pipelineAsync(
-            this.createPageStream(spaceId, totalPages),
+            this.createPageStream(space.id.toString(), totalPages),
             this.createHierarchyTransform(),
             this.createMetadataTransform(),
             new Transform({
