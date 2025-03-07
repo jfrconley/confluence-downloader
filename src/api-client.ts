@@ -483,12 +483,29 @@ export class ConfluenceClient {
     }
 
     async getComments(pageId: string): Promise<ConfluenceComment[]> {
-        const response = await this.fetchJson<{
-            results: ConfluenceComment[];
-        }>(`/rest/api/content/${pageId}/child/comment`, {
-            expand: "body.storage,author",
-        });
+        try {
+            // Get all comments related to the page, including inline comments
+            const response = await this.fetchJson<{
+                results: ConfluenceComment[];
+            }>(`/rest/api/content/${pageId}/child/comment`, {
+                expand: "body.storage,extensions,version,history,history.createdBy,history.lastUpdated,creator,extensions.inlineProperties", 
+                limit: 100 // Increase limit to make sure we get all comments
+            });
 
-        return response.results;
+            if (this.config.enableLogging) {
+                await this.log(`Retrieved ${response.results.length} comments for page ${pageId}`);
+                
+                // Log a sample comment to debug
+                if (response.results.length > 0) {
+                    await this.log(`Sample comment structure:`, 
+                        this.truncateForLog(response.results[0]) as Record<string, unknown>);
+                }
+            }
+
+            return response.results;
+        } catch (error) {
+            console.error(`Error fetching comments for page ${pageId}:`, error);
+            return [];
+        }
     }
 }

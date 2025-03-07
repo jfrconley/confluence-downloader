@@ -2,6 +2,7 @@ import { confirm, select as selectSingle } from "@inquirer/prompts";
 import chalk from "chalk";
 import { select } from "inquirer-select-pro";
 import path from "path";
+import readline from "readline";
 import { ConfluenceLibrary } from "./library.js";
 import type { SpaceInfo } from "./types.js";
 
@@ -13,6 +14,18 @@ export class InteractiveConfluenceCLI {
     }
 
     async start(): Promise<void> {
+        readline.emitKeypressEvents(process.stdin);
+        if (process.stdin.isTTY) {
+            process.stdin.setRawMode(true);
+        }
+
+        process.stdin.on('keypress', (_, key) => {
+            if (key && (key.name === 'q' || key.name === 'Q')) {
+                console.log('\nGoodbye!');
+                process.exit(0);
+            }
+        });
+
         while (true) {
             const action = await selectSingle({
                 message: "What would you like to do?",
@@ -25,9 +38,11 @@ export class InteractiveConfluenceCLI {
                     { name: "Show configuration", value: "show" },
                     { name: "Exit", value: "exit" },
                 ],
+                pageSize: 10,
             });
 
             if (action === "exit") {
+                console.log('\nGoodbye!');
                 break;
             }
 

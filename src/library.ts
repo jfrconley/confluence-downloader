@@ -147,6 +147,10 @@ export class ConfluenceLibrary {
         }
 
         const spacePath = path.join(this.configDir, space.localPath);
+        // Open a bespoke debug file (in append mode) to capture JSON content of pages
+        const debugFilePath = path.join(spacePath, 'debug.log');
+        const debugStream = fs.createWriteStream(debugFilePath, { flags: 'a' });
+
         const client = new ConfluenceClient({
             baseUrl: this.baseUrl,
             apiToken: this.apiToken,
@@ -209,15 +213,44 @@ export class ConfluenceLibrary {
                         batchPromises.push((async () => {
                             const results = await Promise.all(batch.map(async (page) => {
                                 try {
+                                    // Write JSON details of the page to the debug file instead of console.log
+                                    // debugStream.write("Page: " + page.id + "\n" + JSON.stringify(page, null, 2) + "\n");
                                     const comments = await client.getComments(page.id);
-                                    const markdown = converter.convertPage(page, comments);
-                                    await fsHandler.writePage(page, markdown);
-                                    return { success: true, page };
+                                    // debugStream.write("Comments: \n" + JSON.stringify(comments, null, 2) + "\n");
+                                    
+                                    try {
+                                        const markdown = converter.convertPage(page, comments);
+
+                                        if (comments.length > 0) {
+                                            debugStream.write("Page: " + page.id + "\n" + JSON.stringify(page, null, 2) + "\n" + "Comments: \n" + JSON.stringify(comments, null, 2) + "\n" + "Markdown: \n" + markdown + "\n");
+                                        }
+                                        await fsHandler.writePage(page, markdown);
+                                        return { success: true, page };
+                                    } catch (conversionError) {
+                                        // Specific error for conversion issues
+                                        const errorMessage = `Error converting page ${page.title} (ID: ${page.id}): ${conversionError}`;
+                                        console.error(errorMessage);
+                                        
+                                        // Write error details to debug log
+                                        debugStream.write(`ERROR CONVERTING PAGE: ${page.id} (${page.title})\n`);
+                                        debugStream.write(`Error: ${conversionError}\n`);
+                                        debugStream.write(`Stack: ${conversionError instanceof Error ? conversionError.stack : 'No stack trace available'}\n`);
+                                        
+                                        this.errors.push(errorMessage);
+                                        return { success: false, page, error: conversionError };
+                                    }
                                 } catch (error) {
                                     // Store errors to report after progress bar completes
-                                    const errorMessage = `Error writing page ${page.title}: ${error}`;
+                                    const errorMessage = `Error processing page ${page.title} (ID: ${page.id}): ${error}`;
+                                    console.error(errorMessage);
+                                    
+                                    // Write error details to debug log
+                                    debugStream.write(`ERROR PROCESSING PAGE: ${page.id} (${page.title})\n`);
+                                    debugStream.write(`Error: ${error}\n`);
+                                    debugStream.write(`Stack: ${error instanceof Error ? error.stack : 'No stack trace available'}\n`);
+                                    
                                     this.errors.push(errorMessage);
-                                    return { success: false, page };
+                                    return { success: false, page, error };
                                 }
                             }));
 
@@ -242,10 +275,52 @@ export class ConfluenceLibrary {
             // Complete
             this.progressBar.update(100, { status: chalk.green("Completed") });
 
-            // Report any errors after progress bar is done
+            // Report any errors that occurred during processing
             if (this.errors.length > 0) {
-                console.log(chalk.yellow("\nWarnings/Errors:"));
-                this.errors.forEach(error => console.log(chalk.yellow(`- ${error}`)));
+                console.log(chalk.yellow(`\nWarnings/Errors (${this.errors.length}):`));
+                
+                // Group errors by type to make them more readable
+                const errorsByType: Record<string, string[]> = {};
+                
+                this.errors.forEach(error => {
+                    // Extract error type from the message
+                    let errorType = 'Unknown Error';
+                    
+                    if (error.includes('ReferenceError: Element is not defined')) {
+                        errorType = 'DOM Element Error';
+                    } else if (error.includes('Error converting page')) {
+                        errorType = 'Conversion Error';
+                    } else if (error.includes('Error processing page')) {
+                        errorType = 'Processing Error';
+                    }
+                    
+                    if (!errorsByType[errorType]) {
+                        errorsByType[errorType] = [];
+                    }
+                    errorsByType[errorType].push(error);
+                });
+                
+                // Print errors grouped by type
+                Object.entries(errorsByType).forEach(([type, errors]) => {
+                    console.log(chalk.yellow(`\n${type} (${errors.length}):`));
+                    
+                    // If there are many errors of the same type, summarize
+                    if (errors.length > 10) {
+                        errors.slice(0, 5).forEach(error => console.log(chalk.yellow(`- ${error}`)));
+                        console.log(chalk.yellow(`- ... and ${errors.length - 5} more similar errors`));
+                        
+                        // Provide troubleshooting advice based on error type
+                        if (type === 'DOM Element Error') {
+                            console.log(chalk.cyan('\nTroubleshooting "Element is not defined" errors:'));
+                            console.log(chalk.cyan('- This is likely due to DOM API differences between browsers and Node.js'));
+                            console.log(chalk.cyan('- Check the debug.log file for more details on specific pages'));
+                        }
+                    } else {
+                        errors.forEach(error => console.log(chalk.yellow(`- ${error}`)));
+                    }
+                });
+                
+                // Clear errors after reporting
                 this.errors = [];
             }
         } catch (error) {
@@ -254,6 +329,8 @@ export class ConfluenceLibrary {
             throw error;
         } finally {
             this.progressBar.stop();
+            // Properly close the debug file stream
+            debugStream.end();
         }
     }
 

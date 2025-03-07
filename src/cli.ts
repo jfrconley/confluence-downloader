@@ -48,7 +48,7 @@ async function main() {
                 demandOption: true,
             },
         })
-        .command("interactive", "Start interactive mode", {}, async (argv) => {
+        .command("$0", "Start interactive mode", {}, async (argv) => {
             const args = argv as unknown as CliArgs;
             const library = new ConfluenceLibrary({
                 baseUrl: args.base,
@@ -143,13 +143,16 @@ async function main() {
 
     switch (command) {
         case "init": {
+            const rootDir = argv.rootDir as string;
+            const configPath = `${rootDir}/confluence.json`;
+            
             const library = new ConfluenceLibrary({
                 baseUrl: argv.baseUrl as string,
                 apiToken: argv.apiToken as string,
-                configPath: argv.rootDir as string,
+                configPath: configPath,
             });
             await library.initialize();
-            console.log(`Initialized Confluence library in ${argv.rootDir}`);
+            console.log(`Initialized Confluence library in ${rootDir}`);
             break;
         }
 
