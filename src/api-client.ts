@@ -488,17 +488,20 @@ export class ConfluenceClient {
             const response = await this.fetchJson<{
                 results: ConfluenceComment[];
             }>(`/rest/api/content/${pageId}/child/comment`, {
-                expand: "body.storage,extensions,version,history,history.createdBy,history.lastUpdated,creator,extensions.inlineProperties", 
-                limit: 100 // Increase limit to make sure we get all comments
+                expand:
+                    "body.storage,extensions,version,history,history.createdBy,history.lastUpdated,creator,extensions.inlineProperties",
+                limit: 100, // Increase limit to make sure we get all comments
             });
 
             if (this.config.enableLogging) {
                 await this.log(`Retrieved ${response.results.length} comments for page ${pageId}`);
-                
+
                 // Log a sample comment to debug
                 if (response.results.length > 0) {
-                    await this.log(`Sample comment structure:`, 
-                        this.truncateForLog(response.results[0]) as Record<string, unknown>);
+                    await this.log(
+                        `Sample comment structure:`,
+                        this.truncateForLog(response.results[0]) as Record<string, unknown>,
+                    );
                 }
             }
 

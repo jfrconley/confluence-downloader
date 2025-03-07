@@ -145,7 +145,7 @@ async function main() {
         case "init": {
             const rootDir = argv.rootDir as string;
             const configPath = `${rootDir}/confluence.json`;
-            
+
             const library = new ConfluenceLibrary({
                 baseUrl: argv.baseUrl as string,
                 apiToken: argv.apiToken as string,

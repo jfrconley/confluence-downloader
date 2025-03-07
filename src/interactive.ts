@@ -19,9 +19,9 @@ export class InteractiveConfluenceCLI {
             process.stdin.setRawMode(true);
         }
 
-        process.stdin.on('keypress', (_, key) => {
-            if (key && (key.name === 'q' || key.name === 'Q')) {
-                console.log('\nGoodbye!');
+        process.stdin.on("keypress", (_, key) => {
+            if (key && (key.name === "q" || key.name === "Q")) {
+                console.log("\nGoodbye!");
                 process.exit(0);
             }
         });
@@ -42,7 +42,7 @@ export class InteractiveConfluenceCLI {
             });
 
             if (action === "exit") {
-                console.log('\nGoodbye!');
+                console.log("\nGoodbye!");
                 break;
             }
 

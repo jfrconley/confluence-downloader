@@ -133,7 +133,7 @@ export interface ConfluencePage {
 }
 
 export interface CommentLocation {
-    location: 'inline' | 'footer';
+    location: "inline" | "footer";
     inlineProperties?: {
         originalText?: string;
         ref?: string;
@@ -203,9 +203,9 @@ export interface ConfluenceComment {
 
 // Expanded type to represent inline comments with their referenced text
 export interface EnrichedComment extends ConfluenceComment {
-    contextText?: string;  // The text snippet that the comment refers to
-    commentType: 'inline' | 'footer';
-    referenceId?: string;  // For inline comments, the ref ID to the original text
+    contextText?: string; // The text snippet that the comment refers to
+    commentType: "inline" | "footer";
+    referenceId?: string; // For inline comments, the ref ID to the original text
 }
 
 // New types for library management
