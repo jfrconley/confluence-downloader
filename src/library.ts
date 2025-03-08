@@ -5,7 +5,7 @@ import path from "path";
 import { ConfluenceClient } from "./api-client.js";
 import { FileSystemHandler } from "./fs-handler.js";
 import Logger from "./logger.js";
-import { MarkdownConverter } from "./markdown-converter.js";
+import { ADFMarkdownConverter } from "./adf-markdown-converter.js";
 import type { ConfluenceLibraryConfig, LibraryOptions, SpaceConfig, SpaceInfo, SpaceMetadata } from "./types.js";
 
 export class ConfluenceLibrary {
@@ -204,108 +204,32 @@ export class ConfluenceLibrary {
 
             // Setup components (5%)
             this.progressBar.update(5, { status: "Setting up..." });
-            const converter = new MarkdownConverter();
+            const converter = new ADFMarkdownConverter();
             const fsHandler = new FileSystemHandler(spacePath);
             this.progressBar.update(10);
 
-            // Get all pages (30%)
-            const pages = await client.getAllPages(spaceInfo);
-
-            if (pages.length > 0) {
-                // Process pages (60%)
-                const batchSize = 100;
-                const concurrency = 8;
-                let completed = 0;
-                const totalPages = pages.length;
-
-                // Process pages in concurrent batches
-                for (let i = 0; i < pages.length; i += batchSize * concurrency) {
-                    const batchPromises = [];
-
-                    // Create concurrent batch promises
-                    for (let j = 0; j < concurrency && i + j * batchSize < pages.length; j++) {
-                        const start = i + j * batchSize;
-                        const end = Math.min(start + batchSize, pages.length);
-                        const batch = pages.slice(start, end);
-
-                        batchPromises.push((async () => {
-                            const results = await Promise.all(batch.map(async (page) => {
-                                try {
-                                    // Write JSON details of the page to the debug file instead of console.log
-                                    // debugStream.write("Page: " + page.id + "\n" + JSON.stringify(page, null, 2) + "\n");
-                                    const comments = await client.getComments(page.id);
-                                    // debugStream.write("Comments: \n" + JSON.stringify(comments, null, 2) + "\n");
-
-                                    try {
-                                        const markdown = converter.convertPage(page, comments);
-
-                                        if (comments.length > 0) {
-                                            debugStream.write(
-                                                "Page: " + page.id + "\n" + JSON.stringify(page, null, 2) + "\n"
-                                                    + "Comments: \n" + JSON.stringify(comments, null, 2) + "\n"
-                                                    + "Markdown: \n" + markdown + "\n",
-                                            );
-                                        }
-                                        await fsHandler.writePage(page, markdown);
-                                        return { success: true, page };
-                                    } catch (conversionError) {
-                                        // Specific error for conversion issues
-                                        const errorMessage =
-                                            `Error converting page ${page.title} (ID: ${page.id}): ${conversionError}`;
-                                        console.error(errorMessage);
-
-                                        // Write error details to debug log
-                                        debugStream.write(`ERROR CONVERTING PAGE: ${page.id} (${page.title})\n`);
-                                        debugStream.write(`Error: ${conversionError}\n`);
-                                        debugStream.write(
-                                            `Stack: ${
-                                                conversionError instanceof Error
-                                                    ? conversionError.stack
-                                                    : "No stack trace available"
-                                            }\n`,
-                                        );
-
-                                        this.errors.push(errorMessage);
-                                        return { success: false, page, error: conversionError };
-                                    }
-                                } catch (error) {
-                                    // Store errors to report after progress bar completes
-                                    const errorMessage =
-                                        `Error processing page ${page.title} (ID: ${page.id}): ${error}`;
-                                    console.error(errorMessage);
-
-                                    // Write error details to debug log
-                                    debugStream.write(`ERROR PROCESSING PAGE: ${page.id} (${page.title})\n`);
-                                    debugStream.write(`Error: ${error}\n`);
-                                    debugStream.write(
-                                        `Stack: ${error instanceof Error ? error.stack : "No stack trace available"}\n`,
-                                    );
-
-                                    this.errors.push(errorMessage);
-                                    return { success: false, page, error };
-                                }
-                            }));
-
-                            completed += results.length;
-                            const progress = 40 + Math.round((completed / totalPages) * 60);
-                            this.progressBar.update(progress, {
-                                status: `Writing pages... (${completed}/${totalPages})`,
-                            });
-
-                            return results;
-                        })());
-                    }
-
-                    await Promise.all(batchPromises);
+            // Use the unified pipeline to fetch, process, and write pages
+            const result = await client.createUnifiedPagePipeline(spaceInfo, converter, fsHandler, debugStream);
+            
+            if (result.totalPages === 0) {
+                this.progressBar.update(100, { status: chalk.green("No pages found") });
+            } else {
+                // If we had errors, add them to our errors list
+                if (result.errors.length > 0) {
+                    this.errors.push(...result.errors.map(err => 
+                        `Error processing page ${err.page.title} (ID: ${err.page.id}): ${err.error}`
+                    ));
                 }
+                
+                // Update progress to 100%
+                this.progressBar.update(100, { 
+                    status: chalk.green(`Completed: ${result.processedPages}/${result.totalPages} pages`)
+                });
             }
 
             // Update last sync time
             space.lastSync = new Date().toISOString();
             await this.saveConfig(config);
-
-            // Complete
-            this.progressBar.update(100, { status: chalk.green("Completed") });
 
             // Report any errors that occurred during processing
             if (this.errors.length > 0) {
@@ -348,37 +272,22 @@ export class ConfluenceLibrary {
                             Logger.warn("library", `${type}: ${error}`);
                         });
                         console.log(chalk.yellow(`- ... and ${errors.length - 5} more similar errors`));
-                        Logger.warn("library", `... and ${errors.length - 5} more similar errors`);
-
-                        // Provide troubleshooting advice based on error type
-                        if (type === "DOM Element Error") {
-                            console.log(chalk.cyan("\nTroubleshooting \"Element is not defined\" errors:"));
-                            console.log(
-                                chalk.cyan("- This is likely due to DOM API differences between browsers and Node.js"),
-                            );
-                            console.log(chalk.cyan("- Check the debug.log file for more details on specific pages"));
-
-                            Logger.info("library", "Troubleshooting advice provided for DOM Element Errors");
-                        }
                     } else {
                         errors.forEach(error => {
                             console.log(chalk.yellow(`- ${error}`));
-                            Logger.warn("library", `${type}: ${error}`);
                         });
                     }
                 });
-
-                // Clear errors after reporting
-                this.errors = [];
             }
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.progressBar.update(100, { status: chalk.red(`Error: ${errorMessage}`) });
-            Logger.error("library", "Error syncing space", error);
+            this.progressBar.update({ status: chalk.red("Failed") });
+            console.error(chalk.red(`\nError syncing space ${spaceKey}:`));
+            console.error(error);
+            Logger.error("library", `Error syncing space ${spaceKey}`, error);
             throw error;
         } finally {
             this.progressBar.stop();
-            // No need to close debug stream here, we're using our new logger
+            debugStream.end();
         }
     }
 

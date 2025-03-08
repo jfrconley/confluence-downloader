@@ -64,6 +64,10 @@
     "vitest": "^2.0.5"
   },
   "dependencies": {
+    "@atlaskit/adf-schema": "^47.6.0",
+    "@atlaskit/adf-utils": "^19.19.0",
+    "@atlaskit/editor-confluence-transformer": "^9.1.2",
+    "@atlaskit/editor-markdown-transformer": "^5.16.0",
     "@inquirer/prompts": "^7.2.3",
     "@nrfcloud/ts-json-schema-transformer": "^3.1.0",
     "@types/cli-progress": "^3.11.6",

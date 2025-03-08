@@ -68,6 +68,9 @@ export interface ConfluencePage {
             representation: string;
             embeddedContent?: unknown[];
         };
+        atlas_doc_format?: {
+            value: string;
+        };
         _expandable?: Record<string, string>;
     };
     _links: {
