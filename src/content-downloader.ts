@@ -2,8 +2,8 @@ import fs from "fs";
 import path from "path";
 import { Readable, Writable } from "stream";
 import { ADFMarkdownConverter } from "./adf-markdown-converter.js";
-import { ConfluenceClient } from "./api-client.js";
-import type { ConfigManager } from "./config.js";
+import type { ConfluenceClient } from "./api-client.js";
+import { ConfigManager } from "./config.js";
 import { toLowerKebabCase } from "./library.js";
 import Logger from "./logger.js";
 /**
@@ -289,20 +289,24 @@ export class ContentStream extends Readable {
 
 export class ContentWriter extends Writable {
     private converter = new ADFMarkdownConverter();
+    private pagesWritten = 0;
 
     constructor(private configManager: ConfigManager) {
         super({ objectMode: true });
+
+        // Reset counter when stream is piped
+        this.on("pipe", () => {
+            this.pagesWritten = 0;
+        });
     }
 
-    async _write(chunk: ConfluencePage, _encoding: string, callback: (error?: Error | null) => void) {
+    _write(chunk: ConfluencePage, _encoding: string, callback: (error?: Error | null) => void): void {
         const spaceConfig = this.configManager.getSpaceConfig(chunk.space.key);
         if (!spaceConfig) {
             callback(new Error(`Space configuration not found for key: ${chunk.space.key}`));
             return;
         }
 
-        // TODO: Implement writing content to disk
-        // For now, just log that we received the page
         const spacePath = this.configManager.getResolvedPathToSpace(chunk.space.key);
         if (!spacePath) {
             callback(new Error(`Space path not found for key: ${chunk.space.key}`));
@@ -322,6 +326,22 @@ export class ContentWriter extends Writable {
 
         const convertedPage = this.converter.convertPage(chunk);
         fs.writeFileSync(filePath, convertedPage);
+
+        // Increment the counter and emit the event
+        this.pagesWritten++;
+        this.emit("pageWritten", {
+            page: chunk,
+            count: this.pagesWritten,
+            spaceName: chunk.space.name,
+            spaceKey: chunk.space.key,
+            pageTitle: chunk.title,
+        });
+
+        callback();
+    }
+
+    _final(callback: (error?: Error | null) => void): void {
+        this.emit("finish", { totalPages: this.pagesWritten });
         callback();
     }
 }

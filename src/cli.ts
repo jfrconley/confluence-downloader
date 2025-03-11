@@ -2,7 +2,6 @@
 
 import { confirm, input, select } from "@inquirer/prompts";
 import chalk from "chalk";
-import cliProgress from "cli-progress";
 import dotenv from "dotenv";
 import path from "path";
 import { pipeline } from "stream/promises";
@@ -16,18 +15,23 @@ import Logger from "./logger.js";
 // Load environment variables
 dotenv.config();
 
-// Add these variables and function at the top of the file, after imports
-let singleBar: cliProgress.SingleBar | null = null;
-
-function createProgressBar(): cliProgress.SingleBar {
-    const bar = new cliProgress.SingleBar({
-        format: "{status} | {bar} | {percentage}%",
-        barCompleteChar: "\u2588",
-        barIncompleteChar: "\u2591",
-        hideCursor: true,
+// Function to setup running page count display
+function setupContentWriterEvents(writer: ContentWriter, spaceName: string): void {
+    writer.on("pageWritten", (data: { count: number; pageTitle: string }) => {
+        // Clear the current line
+        process.stdout.clearLine(0);
+        process.stdout.cursorTo(0);
+        // Display the current tally
+        process.stdout.write(`Downloading ${spaceName}: ${data.count} pages written (last: ${data.pageTitle})...`);
     });
-    bar.start(100, 0, { status: "Initializing..." });
-    return bar;
+
+    writer.on("finish", (data: { totalPages: number }) => {
+        // Clear the current line
+        process.stdout.clearLine(0);
+        process.stdout.cursorTo(0);
+        // Display the final tally
+        console.log(chalk.green(`✓ Downloaded ${spaceName}: ${data.totalPages} pages written`));
+    });
 }
 
 async function main() {
@@ -422,40 +426,22 @@ async function main() {
                 })
                 .demandCommand();
         })
-        .command("download", "Download Confluence space content", yargs =>
-            yargs.option("spaceKey", {
+        .command("download <space>", "Download a space", {
+            configPath: {
                 type: "string",
-                description: "Space key to download",
-                demandOption: true,
-            }), async (argv) => {
+                describe: "Path to the config file",
+                default: "./confluence-downloader.config.json",
+            },
+        }, async (argv) => {
             try {
+                const spaceKey = argv.space as string;
                 const configManager = new ConfigManager(argv.configPath as string);
+                const spaceConfig = configManager.getSpaceConfig(spaceKey);
 
-                // Get space configuration
-                const spaceConfig = configManager.getSpaceConfig(argv.spaceKey!);
                 if (!spaceConfig) {
-                    console.error(`Space not configured: ${argv.spaceKey}`);
-                    console.log("Use \"spaces add\" to add the space first");
+                    console.error(`Space configuration not found for key: ${spaceKey}`);
                     process.exit(1);
                 }
-
-                // Get API configuration
-                const apiConfig = configManager.getApiConfig();
-                if (!apiConfig.apiToken) {
-                    console.error(
-                        "API token not found in settings. Please set it with \"settings set --key apiToken --value TOKEN\"",
-                    );
-                    process.exit(1);
-                }
-                if (!apiConfig.baseUrl) {
-                    console.error(
-                        "Base URL not found in settings. Please set it with \"settings set --key baseUrl --value URL\"",
-                    );
-                    process.exit(1);
-                }
-
-                // Create progress bar
-                singleBar = createProgressBar();
 
                 console.log(`Downloading space ${spaceConfig.key} to ${spaceConfig.localPath}...`);
 
@@ -463,27 +449,20 @@ async function main() {
                 const client = new ConfluenceClient(configManager);
                 const downloader = new ContentStream(client, [spaceConfig.key]);
 
+                // Create writer and setup event handlers
+                const writer = new ContentWriter(configManager);
+                setupContentWriterEvents(writer, spaceConfig.name || spaceConfig.key);
+
                 // Download content
-                await pipeline(downloader, new ContentWriter(configManager));
+                await pipeline(downloader, writer);
 
                 // Update last synced timestamp
                 configManager.updateSpaceLastSynced(spaceConfig.key);
                 configManager.save();
 
-                if (singleBar) {
-                    singleBar.stop();
-                    singleBar = null;
-                }
-
-                console.log(chalk.green(`✓ Space ${spaceConfig.key} successfully downloaded`));
-
                 configManager.close();
             } catch (error: unknown) {
                 console.error("Error:", error instanceof Error ? error.message : String(error));
-                if (singleBar) {
-                    singleBar.stop();
-                    singleBar = null;
-                }
                 process.exit(1);
             }
         })

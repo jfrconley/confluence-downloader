@@ -289,44 +289,75 @@ export class InteractiveConfluenceCLI {
         const spaces = this.configManager.getAllSpaceConfigs();
 
         if (spaces.length === 0) {
-            console.log(chalk.yellow("No spaces configured. Use \"add\" to add a space."));
+            console.log(chalk.yellow("No spaces configured. Use \"add space\" to add a space."));
             return;
         }
 
-        // Format choices for selection
-        const choices = spaces.map(space => ({
-            value: space.key,
-            label: `${space.key} - ${space.name}`,
-        }));
-
-        // Select space to download
-        const spaceKey = await select({
+        // Choose a space to download
+        const result = await select({
             message: "Select a space to download:",
-            choices,
+            choices: spaces.map((space) => ({
+                value: space.key,
+                name: this.formatSpaceChoice(space),
+            })),
         });
+        const spaceKey = result as string;
 
+        // Get space configuration
         const spaceConfig = this.configManager.getSpaceConfig(spaceKey);
         if (!spaceConfig) {
-            console.log(chalk.red(`Space configuration not found for ${spaceKey}`));
+            console.log(chalk.red(`Space configuration not found for key: ${spaceKey}`));
+            return;
+        }
+
+        // Confirm download
+        const confirmed = await confirm({
+            message: `Download space ${spaceConfig.name || spaceConfig.key}?`,
+            default: true,
+        });
+
+        if (!confirmed) {
+            console.log("Operation cancelled");
             return;
         }
 
         // Get client
         const client = await this.getOrCreateClient();
 
-        // Initialize content downloader
-        console.log(chalk.cyan(`\nDownloading space ${spaceKey} to ${spaceConfig.localPath}...`));
+        console.log(
+            chalk.cyan(`\nDownloading space ${spaceConfig.name || spaceConfig.key} to ${spaceConfig.localPath}...`),
+        );
 
         try {
-            // Download space content
+            // Create downloader and writer
             const downloader = new ContentStream(client, [spaceKey]);
-            await pipeline(downloader, new ContentWriter(this.configManager));
+            const writer = new ContentWriter(this.configManager);
 
-            // Update last synced timestamp
+            // Set up event listeners for tracking progress
+            writer.on("pageWritten", (data: { count: number; pageTitle: string }) => {
+                // Clear the current line
+                process.stdout.clearLine(0);
+                process.stdout.cursorTo(0);
+                // Display the current tally
+                process.stdout.write(`Downloading: ${data.count} pages written (last: ${data.pageTitle})...`);
+            });
+
+            writer.on("finish", (data: { totalPages: number }) => {
+                // Clear the current line
+                process.stdout.clearLine(0);
+                process.stdout.cursorTo(0);
+                // Display the final tally
+                console.log(chalk.green(`✓ Downloaded ${data.totalPages} pages`));
+            });
+
+            // Download content
+            await pipeline(downloader, writer);
+
+            // Update last synced timestamp and save configuration
             this.configManager.updateSpaceLastSynced(spaceKey);
             this.configManager.save();
 
-            console.log(chalk.green(`✓ Space ${spaceKey} successfully downloaded`));
+            console.log(chalk.green(`\n✓ Space ${spaceConfig.name || spaceConfig.key} successfully downloaded`));
         } catch (error) {
             console.error(chalk.red("Error downloading space:"), error);
         }
@@ -334,14 +365,7 @@ export class InteractiveConfluenceCLI {
 
     private async downloadAllSpaces(): Promise<void> {
         const spaces = this.configManager.getAllSpaceConfigs();
-
-        if (spaces.length === 0) {
-            console.log(chalk.yellow("No spaces configured. Use \"add\" to add a space."));
-            return;
-        }
-
-        // Filter enabled spaces
-        const enabledSpaces = spaces.filter(s => s.enabled);
+        const enabledSpaces = spaces.filter((space) => space.enabled);
 
         if (enabledSpaces.length === 0) {
             console.log(chalk.yellow("No enabled spaces found. Enable spaces using \"settings\"."));
@@ -362,18 +386,43 @@ export class InteractiveConfluenceCLI {
         // Get client
         const client = await this.getOrCreateClient();
 
-        // Initialize content downloader
         console.log(chalk.cyan(`\nDownloading ${enabledSpaces.length} spaces...`));
 
         try {
-            console.log(`Downloading all spaces...`);
+            // Create downloader and writer
             const downloader = new ContentStream(client, enabledSpaces.map(s => s.key));
-            await pipeline(downloader, new ContentWriter(this.configManager));
+            const writer = new ContentWriter(this.configManager);
 
+            // Set up event listeners for tracking progress
+            let pagesCount = 0;
+
+            writer.on("pageWritten", (data: { count: number; spaceKey: string; pageTitle: string }) => {
+                // Clear the current line
+                process.stdout.clearLine(0);
+                process.stdout.cursorTo(0);
+                // Increment total count
+                pagesCount = data.count;
+                // Display the current tally
+                process.stdout.write(
+                    `Downloading all spaces: ${pagesCount} total pages written (last: ${data.spaceKey}/${data.pageTitle})...`,
+                );
+            });
+
+            writer.on("finish", () => {
+                // Clear the current line
+                process.stdout.clearLine(0);
+                process.stdout.cursorTo(0);
+                // Display the final tally
+                console.log(chalk.green(`✓ Downloaded all spaces: ${pagesCount} total pages written`));
+            });
+
+            // Download content
+            await pipeline(downloader, writer);
+
+            // Update last synced for all spaces
             for (const space of enabledSpaces) {
                 this.configManager.updateSpaceLastSynced(space.key);
                 this.configManager.save();
-                console.log(chalk.green(`✓ Space ${space.key} successfully downloaded`));
             }
 
             console.log(chalk.green(`\n✓ All ${enabledSpaces.length} spaces successfully downloaded`));

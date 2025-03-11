@@ -27,6 +27,6 @@ export default [
             ]
     }),
     {
-        ignores: ["dist", "node_modules", "src/lib/core/time"]
+        ignores: ["dist", "node_modules", ".rollup.cache"]
     }
 ];
