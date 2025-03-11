@@ -1,31 +1,33 @@
 #!/usr/bin/env node
 
+import { confirm, input, select } from "@inquirer/prompts";
 import chalk from "chalk";
+import cliProgress from "cli-progress";
 import dotenv from "dotenv";
-import os from "os";
+import path from "path";
+import { pipeline } from "stream/promises";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { InteractiveConfluenceCLI } from "./interactive.js";
-import { ConfluenceLibrary } from "./library.js";
+import { ConfluenceClient } from "./api-client.js";
+import { ConfigManager } from "./config.js";
+import { ContentStream, ContentWriter } from "./content-downloader.js";
 import Logger from "./logger.js";
-import type { ConfluenceConfig } from "./types.js";
 
 // Load environment variables
 dotenv.config();
 
-interface CliArgs {
-    token: string;
-    base: string;
-    config: string;
-    rootDir?: string;
-    baseUrl?: string;
-    apiToken?: string;
-    spaceKey?: string;
-    localPath?: string;
-    outputDir?: string;
-    email?: string;
-    debug?: boolean;
-    debugLogPath?: string;
+// Add these variables and function at the top of the file, after imports
+let singleBar: cliProgress.SingleBar | null = null;
+
+function createProgressBar(): cliProgress.SingleBar {
+    const bar = new cliProgress.SingleBar({
+        format: "{status} | {bar} | {percentage}%",
+        barCompleteChar: "\u2588",
+        barIncompleteChar: "\u2591",
+        hideCursor: true,
+    });
+    bar.start(100, 0, { status: "Initializing..." });
+    return bar;
 }
 
 async function main() {
@@ -36,19 +38,17 @@ async function main() {
                 alias: "t",
                 type: "string",
                 description: "Confluence API token",
-                demandOption: true,
             },
             base: {
                 alias: "b",
                 type: "string",
                 description: "Confluence base URL",
-                demandOption: true,
             },
-            config: {
+            configPath: {
                 alias: "c",
                 type: "string",
-                description: "Path to confluence.json config file",
-                demandOption: true,
+                description:
+                    "Path to configuration file (default: ~/.local/share/confluence-downloader/confluence.json)",
             },
             debug: {
                 alias: "d",
@@ -61,96 +61,454 @@ async function main() {
                 description: "Path for debug log file (defaults to current directory)",
             },
         })
-        .command("$0", "Start interactive mode", {}, async (argv) => {
-            const args = argv as unknown as CliArgs;
+        .command("init", "Initialize the configuration file", {}, async (argv) => {
+            try {
+                if (!argv.base || !argv.token) {
+                    console.error("Base URL and API token are required for initialization");
+                    process.exit(1);
+                }
 
-            const library = new ConfluenceLibrary({
-                baseUrl: args.base,
-                apiToken: args.token,
-                configPath: args.config,
-            });
+                const configManager = new ConfigManager(argv.configPath as string);
 
-            await library.initialize();
-            const cli = new InteractiveConfluenceCLI(library);
-            await cli.start();
+                // Set API configuration from command line arguments
+                configManager.setApiConfig(
+                    argv.base as string,
+                    argv.token as string,
+                    argv.concurrency as number,
+                );
+                configManager.save();
+
+                console.log(chalk.green("Configuration initialized successfully"));
+            } catch (error: unknown) {
+                console.error("Error:", error instanceof Error ? error.message : String(error));
+                process.exit(1);
+            }
         })
-        .command("init", "Initialize a new Confluence library", {
-            rootDir: {
-                type: "string",
-                description: "Root directory for the library",
-                default: "./confluence-library",
-            },
-            baseUrl: {
-                type: "string",
-                description: "Confluence base URL",
-                default: process.env.CONFLUENCE_BASE,
-            },
-            apiToken: {
-                type: "string",
-                description: "Confluence API token",
-                default: process.env.CONFLUENCE_TOKEN,
-            },
+        .command("reset", "Reset the configuration (removes all content, keeps API settings)", {}, async (argv) => {
+            try {
+                const confirmed = await confirm({
+                    message: chalk.yellow(
+                        "WARNING: This will delete all content data (spaces, pages, comments, etc.) but keep your API settings. Continue?",
+                    ),
+                    default: false,
+                });
+
+                if (!confirmed) {
+                    console.log("Reset cancelled");
+                    return;
+                }
+
+                const configManager = new ConfigManager(argv.configPath as string);
+
+                // Keep API configuration, but remove spaces
+                const apiConfig = configManager.getApiConfig();
+
+                // Apply the reset configuration
+                configManager.setApiConfig(
+                    apiConfig.baseUrl,
+                    apiConfig.apiToken,
+                    apiConfig.concurrency,
+                );
+                // Clear spaces but keep settings
+                configManager.getAllSpaceConfigs().forEach(space => {
+                    configManager.removeSpaceConfig(space.key);
+                });
+                configManager.save();
+
+                console.log(chalk.green("Configuration reset successfully"));
+            } catch (error: unknown) {
+                console.error("Error:", error instanceof Error ? error.message : String(error));
+                process.exit(1);
+            }
         })
-        .command("add-space", "Add a space to the library", {
-            spaceKey: {
+        .command("show", "Show current configuration", {}, async (argv) => {
+            try {
+                const configManager = new ConfigManager(argv.configPath as string);
+
+                const apiConfig = configManager.getApiConfig();
+                const spaces = configManager.getAllSpaceConfigs();
+                const settings = configManager.getAllSettings();
+
+                console.log(chalk.bold("\nAPI Configuration:"));
+                console.log(`  Base URL: ${apiConfig.baseUrl || "Not set"}`);
+                console.log(`  API Token: ${apiConfig.apiToken ? "****" : "Not set"}`);
+                console.log(`  Concurrency: ${apiConfig.concurrency || "Default"}`);
+
+                console.log(chalk.bold("\nSpaces:"));
+                if (spaces.length === 0) {
+                    console.log("  No spaces configured");
+                } else {
+                    spaces.forEach(space => {
+                        console.log(`  • ${space.key} (${space.name})`);
+                        console.log(`    ID: ${space.id}`);
+                        console.log(`    Local path: ${space.localPath}`);
+                        console.log(`    Last synced: ${space.lastSynced || "Never"}`);
+                        console.log(`    Status: ${space.status}, Enabled: ${space.enabled ? "Yes" : "No"}`);
+                        console.log();
+                    });
+                }
+
+                console.log(chalk.bold("\nSettings:"));
+                if (Object.keys(settings).length === 0) {
+                    console.log("  No custom settings");
+                } else {
+                    Object.entries(settings).forEach(([key, value]) => {
+                        console.log(`  ${key}: ${value}`);
+                    });
+                }
+
+                configManager.close();
+            } catch (error: unknown) {
+                console.error("Error:", error instanceof Error ? error.message : String(error));
+                process.exit(1);
+            }
+        })
+        .command("settings", "Manage application settings", (yargs) => {
+            return yargs
+                .command("list", "List all settings", yargs => yargs, async (argv) => {
+                    try {
+                        const configManager = new ConfigManager(argv.configPath as string);
+
+                        const settings = configManager.getAllSettings();
+                        console.log(chalk.bold("Application Settings:"));
+
+                        for (const [key, value] of Object.entries(settings)) {
+                            if (key === "apiToken") {
+                                console.log(`${key}: ${"*".repeat(8)}`);
+                            } else {
+                                console.log(`${key}: ${value}`);
+                            }
+                        }
+
+                        configManager.close();
+                    } catch (error: unknown) {
+                        console.error("Error:", error instanceof Error ? error.message : String(error));
+                        process.exit(1);
+                    }
+                })
+                .command("get", "Get a setting value", yargs =>
+                    yargs.option("key", {
+                        type: "string",
+                        description: "Setting key",
+                        demandOption: true,
+                    }), async (argv) => {
+                    try {
+                        const configManager = new ConfigManager(argv.configPath as string);
+
+                        const value = configManager.getSetting(argv.key!);
+
+                        if (value) {
+                            if (argv.key === "apiToken") {
+                                console.log(`${argv.key}: ${"*".repeat(8)}`);
+                            } else {
+                                console.log(`${argv.key}: ${value}`);
+                            }
+                        } else {
+                            console.log(`Setting not found: ${argv.key}`);
+                        }
+
+                        configManager.close();
+                    } catch (error: unknown) {
+                        console.error("Error:", error instanceof Error ? error.message : String(error));
+                        process.exit(1);
+                    }
+                })
+                .command("set", "Set a setting value", yargs =>
+                    yargs.option("key", {
+                        type: "string",
+                        description: "Setting key",
+                        demandOption: true,
+                    }).option("value", {
+                        type: "string",
+                        description: "Setting value",
+                        demandOption: true,
+                    }), async (argv) => {
+                    try {
+                        const configManager = new ConfigManager(argv.configPath as string);
+
+                        configManager.setSetting(argv.key!, argv.value!);
+                        configManager.save();
+                        console.log(chalk.green(`✓ Setting updated: ${argv.key}`));
+
+                        configManager.close();
+                    } catch (error: unknown) {
+                        console.error("Error:", error instanceof Error ? error.message : String(error));
+                        process.exit(1);
+                    }
+                })
+                .command("remove", "Remove a setting", yargs =>
+                    yargs.option("key", {
+                        type: "string",
+                        description: "Setting key",
+                        demandOption: true,
+                    }), async (argv) => {
+                    try {
+                        const configManager = new ConfigManager(argv.configPath as string);
+
+                        configManager.removeSetting(argv.key!);
+                        configManager.save();
+                        console.log(chalk.green(`✓ Setting removed: ${argv.key}`));
+
+                        configManager.close();
+                    } catch (error: unknown) {
+                        console.error("Error:", error instanceof Error ? error.message : String(error));
+                        process.exit(1);
+                    }
+                })
+                .demandCommand();
+        })
+        .command("spaces", "Manage Confluence spaces", (yargs) => {
+            return yargs
+                .command("list", "List configured spaces", yargs => yargs, async (argv) => {
+                    try {
+                        const configManager = new ConfigManager(argv.configPath as string);
+
+                        const spaces = configManager.getAllSpaceConfigs();
+
+                        if (spaces.length === 0) {
+                            console.log("No spaces configured. Use \"spaces add\" to add a space.");
+                            configManager.close();
+                            return;
+                        }
+
+                        console.log(chalk.bold("Configured Spaces:"));
+                        for (const space of spaces) {
+                            const status = space.enabled ? chalk.green("✓ Enabled") : chalk.gray("✗ Disabled");
+                            console.log(`${space.key} - ${space.name} [${status}]`);
+                            console.log(`  Path: ${space.localPath}`);
+                            console.log(`  Last synced: ${space.lastSynced || "Never"}`);
+                            console.log("");
+                        }
+
+                        configManager.close();
+                    } catch (error: unknown) {
+                        console.error("Error:", error instanceof Error ? error.message : String(error));
+                        process.exit(1);
+                    }
+                })
+                .command("add", "Add a new space", yargs =>
+                    yargs.option("spaceKey", {
+                        type: "string",
+                        description: "Confluence space key",
+                        demandOption: true,
+                    }).option("output", {
+                        type: "string",
+                        description: "Local path for space content",
+                        demandOption: true,
+                    }), async (argv) => {
+                    try {
+                        const configManager = new ConfigManager(argv.configPath as string);
+
+                        // Get saved base URL if not provided
+                        const apiConfig = configManager.getApiConfig();
+                        const baseUrl = argv.base || apiConfig.baseUrl;
+                        if (!baseUrl) {
+                            console.error(
+                                "Base URL not provided and not found in settings. Please provide --baseUrl or set it with \"settings set --key baseUrl --value URL\"",
+                            );
+                            process.exit(1);
+                        }
+
+                        // Get API token from settings
+                        const apiToken = apiConfig.apiToken;
+                        if (!apiToken) {
+                            console.error(
+                                "API token not found in settings. Please set it with \"settings set --key apiToken --value TOKEN\"",
+                            );
+                            process.exit(1);
+                        }
+
+                        // Create client to get space info
+                        const client = new ConfluenceClient(configManager);
+
+                        // Get space key - either from args or prompt
+                        let spaceKey = argv.spaceKey;
+                        if (!spaceKey) {
+                            // Fetch available spaces
+                            const spaces = await client.getAllSpaces();
+                            if (spaces.length === 0) {
+                                console.error("No spaces found in Confluence instance");
+                                process.exit(1);
+                            }
+
+                            // Format options for selection
+                            const options = spaces.map(space => ({
+                                value: space.key,
+                                label: `${space.key} - ${space.name}`,
+                            }));
+
+                            spaceKey = await select({
+                                message: "Select a space:",
+                                choices: options,
+                            });
+                        }
+
+                        // Get output directory - either from args or prompt
+                        let outputDir = argv.output;
+                        if (!outputDir) {
+                            outputDir = await input({
+                                message: "Enter local path for space content:",
+                                default: path.join(process.cwd(), spaceKey),
+                            });
+                        }
+
+                        // Get space details
+                        const spaces = await client.getAllSpaces();
+                        const spaceInfo = spaces.find(s => s.key === spaceKey);
+
+                        if (!spaceInfo) {
+                            console.error(`Space not found: ${spaceKey}`);
+                            process.exit(1);
+                        }
+
+                        // Save space config
+                        configManager.saveSpaceConfig({
+                            id: spaceInfo.id.toString(),
+                            key: spaceInfo.key,
+                            name: spaceInfo.name,
+                            description: spaceInfo.description,
+                            localPath: outputDir,
+                            lastSynced: new Date().toISOString(),
+                            enabled: true,
+                            status: "current",
+                        });
+                        configManager.save();
+
+                        console.log(chalk.green(`✓ Space added: ${spaceKey}`));
+                        console.log(`Use "download --spaceKey ${spaceKey}" to download content`);
+
+                        configManager.close();
+                    } catch (error: unknown) {
+                        console.error("Error:", error instanceof Error ? error.message : String(error));
+                        process.exit(1);
+                    }
+                })
+                .command("remove", "Remove a space", yargs =>
+                    yargs.option("spaceKey", {
+                        type: "string",
+                        description: "Space key to remove",
+                        demandOption: true,
+                    }), async (argv) => {
+                    try {
+                        const configManager = new ConfigManager(argv.configPath as string);
+
+                        // Check if space exists
+                        const space = configManager.getSpaceConfig(argv.spaceKey!);
+                        if (!space) {
+                            console.error(`Space not found: ${argv.spaceKey}`);
+                            process.exit(1);
+                        }
+
+                        // Confirm deletion
+                        const shouldRemove = await confirm({
+                            message:
+                                `Are you sure you want to remove ${argv.spaceKey}? This will not delete downloaded content.`,
+                            default: false,
+                        });
+
+                        if (shouldRemove) {
+                            configManager.removeSpaceConfig(argv.spaceKey!);
+                            configManager.save();
+                            console.log(chalk.green(`✓ Space removed: ${argv.spaceKey}`));
+                        } else {
+                            console.log("Operation cancelled");
+                        }
+
+                        configManager.close();
+                    } catch (error: unknown) {
+                        console.error("Error:", error instanceof Error ? error.message : String(error));
+                        process.exit(1);
+                    }
+                })
+                .demandCommand();
+        })
+        .command("download", "Download Confluence space content", yargs =>
+            yargs.option("spaceKey", {
                 type: "string",
-                description: "Confluence space key",
+                description: "Space key to download",
                 demandOption: true,
-            },
-            localPath: {
-                type: "string",
-                description: "Local directory name for the space",
-            },
+            }), async (argv) => {
+            try {
+                const configManager = new ConfigManager(argv.configPath as string);
+
+                // Get space configuration
+                const spaceConfig = configManager.getSpaceConfig(argv.spaceKey!);
+                if (!spaceConfig) {
+                    console.error(`Space not configured: ${argv.spaceKey}`);
+                    console.log("Use \"spaces add\" to add the space first");
+                    process.exit(1);
+                }
+
+                // Get API configuration
+                const apiConfig = configManager.getApiConfig();
+                if (!apiConfig.apiToken) {
+                    console.error(
+                        "API token not found in settings. Please set it with \"settings set --key apiToken --value TOKEN\"",
+                    );
+                    process.exit(1);
+                }
+                if (!apiConfig.baseUrl) {
+                    console.error(
+                        "Base URL not found in settings. Please set it with \"settings set --key baseUrl --value URL\"",
+                    );
+                    process.exit(1);
+                }
+
+                // Create progress bar
+                singleBar = createProgressBar();
+
+                console.log(`Downloading space ${spaceConfig.key} to ${spaceConfig.localPath}...`);
+
+                // Create client and downloader
+                const client = new ConfluenceClient(configManager);
+                const downloader = new ContentStream(client, [spaceConfig.key]);
+
+                // Download content
+                await pipeline(downloader, new ContentWriter(configManager));
+
+                // Update last synced timestamp
+                configManager.updateSpaceLastSynced(spaceConfig.key);
+                configManager.save();
+
+                if (singleBar) {
+                    singleBar.stop();
+                    singleBar = null;
+                }
+
+                console.log(chalk.green(`✓ Space ${spaceConfig.key} successfully downloaded`));
+
+                configManager.close();
+            } catch (error: unknown) {
+                console.error("Error:", error instanceof Error ? error.message : String(error));
+                if (singleBar) {
+                    singleBar.stop();
+                    singleBar = null;
+                }
+                process.exit(1);
+            }
         })
-        .command("remove-space", "Remove a space from the library", {
-            spaceKey: {
-                type: "string",
-                description: "Confluence space key",
-                demandOption: true,
-            },
+        .command("interactive", "Start interactive mode", yargs => yargs, async (argv) => {
+            try {
+                const { InteractiveConfluenceCLI } = await import("./interactive.js");
+                const cli = new InteractiveConfluenceCLI(argv.configPath as string);
+                await cli.start();
+            } catch (error: unknown) {
+                console.error("Error:", error instanceof Error ? error.message : String(error));
+                process.exit(1);
+            }
         })
-        .command("list-spaces", "List all spaces in the library")
-        .command("sync", "Sync one or all spaces", {
-            spaceKey: {
-                type: "string",
-                description: "Confluence space key (sync all if not provided)",
-            },
+        .command("$0", "Start interactive mode (default)", {}, async (argv) => {
+            try {
+                const { InteractiveConfluenceCLI } = await import("./interactive.js");
+                const cli = new InteractiveConfluenceCLI(argv.configPath as string);
+                await cli.start();
+            } catch (error: unknown) {
+                console.error("Error:", error instanceof Error ? error.message : String(error));
+                process.exit(1);
+            }
         })
-        .command("sync-space", "Sync a single space (legacy mode)", {
-            baseUrl: {
-                type: "string",
-                description: "Confluence base URL",
-                default: process.env.CONFLUENCE_BASE,
-            },
-            apiToken: {
-                type: "string",
-                description: "Confluence API token",
-                default: process.env.CONFLUENCE_TOKEN,
-            },
-            spaceKey: {
-                type: "string",
-                description: "Confluence space key",
-                default: process.env.CONFLUENCE_SPACE,
-            },
-            outputDir: {
-                type: "string",
-                description: "Output directory for markdown files",
-                default: process.env.CONFLUENCE_OUTPUT_DIR || "confluence-output",
-            },
-            email: {
-                type: "string",
-                description: "Confluence account email",
-                default: process.env.CONFLUENCE_EMAIL,
-            },
-            concurrency: {
-                type: "number",
-                description: "Number of concurrent downloads",
-                default: Math.max(1, Math.min(os.cpus().length - 1, 4)),
-            },
-        })
-        .command("show", "Show configuration location and data")
-        .demandCommand(1)
         .help()
+        .demandCommand(0, "Interactive mode will be used if no command is specified")
         .parse();
 
     // Initialize logger if debug flag is set
@@ -161,147 +519,9 @@ async function main() {
         });
         Logger.info("cli", "Debug logging enabled");
     }
-
-    const command = argv._[0];
-
-    switch (command) {
-        case "init": {
-            const rootDir = argv.rootDir as string;
-            const configPath = `${rootDir}/confluence.json`;
-
-            const library = new ConfluenceLibrary({
-                baseUrl: argv.baseUrl as string,
-                apiToken: argv.apiToken as string,
-                configPath: configPath,
-            });
-            await library.initialize();
-            console.log(`Initialized Confluence library in ${rootDir}`);
-            Logger.info("cli", `Initialized Confluence library in ${rootDir}`);
-            break;
-        }
-
-        case "add-space": {
-            const library = new ConfluenceLibrary({
-                baseUrl: process.env.CONFLUENCE_BASE!,
-                apiToken: process.env.CONFLUENCE_TOKEN!,
-                configPath: process.env.CONFLUENCE_CONFIG!,
-            });
-            const localPath = argv.localPath || argv.spaceKey;
-            await library.addSpace(argv.spaceKey as string, localPath as string);
-            console.log(`Added space ${argv.spaceKey} to library`);
-            Logger.info("cli", `Added space ${argv.spaceKey} to library`);
-            break;
-        }
-
-        case "remove-space": {
-            const library = new ConfluenceLibrary({
-                baseUrl: process.env.CONFLUENCE_BASE!,
-                apiToken: process.env.CONFLUENCE_TOKEN!,
-                configPath: process.env.CONFLUENCE_CONFIG!,
-            });
-            await library.removeSpace(argv.spaceKey as string);
-            console.log(`Removed space ${argv.spaceKey} from library`);
-            Logger.info("cli", `Removed space ${argv.spaceKey} from library`);
-            break;
-        }
-
-        case "list-spaces": {
-            const library = new ConfluenceLibrary({
-                baseUrl: process.env.CONFLUENCE_BASE!,
-                apiToken: process.env.CONFLUENCE_TOKEN!,
-                configPath: process.env.CONFLUENCE_CONFIG!,
-            });
-            const spaces = await library.listSpaces();
-            console.log("Spaces in library:");
-            Logger.info("cli", `Listing ${spaces.length} spaces in library`);
-            spaces.forEach(space => {
-                console.log(`- ${space.spaceKey} (${space.localPath})`);
-                console.log(`  Last synced: ${new Date(space.lastSync).toLocaleString()}`);
-                Logger.debug(
-                    "cli",
-                    `Space: ${space.spaceKey} (${space.localPath}), Last synced: ${
-                        new Date(space.lastSync).toLocaleString()
-                    }`,
-                );
-            });
-            break;
-        }
-
-        case "sync": {
-            const library = new ConfluenceLibrary({
-                baseUrl: process.env.CONFLUENCE_BASE!,
-                apiToken: process.env.CONFLUENCE_TOKEN!,
-                configPath: process.env.CONFLUENCE_CONFIG!,
-            });
-            if (argv.spaceKey) {
-                await library.syncSpace(argv.spaceKey as string);
-                console.log(`Synced space ${argv.spaceKey}`);
-                Logger.info("cli", `Synced space ${argv.spaceKey}`);
-            } else {
-                await library.syncAll();
-                console.log("Synced all spaces");
-                Logger.info("cli", "Synced all spaces");
-            }
-            break;
-        }
-
-        case "sync-space": {
-            // Legacy single space sync
-            const config: ConfluenceConfig = {
-                baseUrl: argv.baseUrl as string,
-                apiToken: argv.apiToken as string,
-                spaceKey: argv.spaceKey as string,
-                outputDir: argv.outputDir as string,
-            };
-
-            if (!config.baseUrl) {
-                throw new Error("Base URL is required");
-            }
-            if (!config.apiToken) {
-                throw new Error("API token is required");
-            }
-            if (!config.spaceKey) {
-                throw new Error("Space key is required");
-            }
-            if (!argv.email) {
-                throw new Error("Email is required");
-            }
-
-            process.env.CONFLUENCE_EMAIL = argv.email as string;
-            const library = new ConfluenceLibrary({
-                baseUrl: config.baseUrl,
-                apiToken: config.apiToken,
-                configPath: config.outputDir,
-            });
-            await library.initialize();
-            await library.addSpace(config.spaceKey, ".");
-            await library.syncSpace(config.spaceKey);
-            break;
-        }
-
-        case "show": {
-            const library = new ConfluenceLibrary({
-                baseUrl: process.env.CONFLUENCE_BASE!,
-                apiToken: process.env.CONFLUENCE_TOKEN!,
-                configPath: process.env.CONFLUENCE_CONFIG!,
-            });
-            const config = await library.getConfig();
-            console.log(chalk.cyan("Configuration Location:"));
-            console.log(library.configPath);
-            console.log();
-            console.log(chalk.cyan("Configuration Data:"));
-            console.log(JSON.stringify(config, null, 2));
-            Logger.debug("cli", "Showing configuration", { path: library.configPath, config });
-            break;
-        }
-    }
 }
 
-// Call main at the end
-main().catch((error) => {
-    console.error(chalk.red("Error:"), error);
-    Logger.error("cli", "Unhandled error", error);
-}).finally(() => {
-    // Ensure logger is closed properly
-    Logger.close();
+main().catch((error: Error) => {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
 });

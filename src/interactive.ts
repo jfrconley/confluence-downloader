@@ -1,298 +1,487 @@
-import { confirm, select as selectSingle } from "@inquirer/prompts";
+import { confirm, input, password, select } from "@inquirer/prompts";
 import chalk from "chalk";
-import { select } from "inquirer-select-pro";
-import path from "path";
-import readline from "readline";
-import { ConfluenceLibrary } from "./library.js";
-import Logger from "./logger.js";
-import type { SpaceInfo } from "./types.js";
+import { select as selectPro } from "inquirer-select-pro";
+import path, { resolve } from "path";
+import { pipeline } from "stream/promises";
+import { ConfluenceClient } from "./api-client.js";
+import { ConfigManager, SpaceConfig } from "./config.js";
+import { ContentStream, ContentWriter } from "./content-downloader.js";
+import { toLowerKebabCase } from "./library.js";
 
 export class InteractiveConfluenceCLI {
-    private library: ConfluenceLibrary;
+    private configManager: ConfigManager;
+    private client: ConfluenceClient | null = null;
+    private configPath: string | undefined;
 
-    constructor(library: ConfluenceLibrary) {
-        this.library = library;
-        Logger.info("interactive", "InteractiveConfluenceCLI initialized");
+    constructor(configPath?: string) {
+        this.configPath = configPath;
+        this.configManager = new ConfigManager(configPath);
     }
 
     async start(): Promise<void> {
-        readline.emitKeypressEvents(process.stdin);
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(true);
-        }
+        try {
+            console.log(chalk.bold.blue("Confluence Downloader - Interactive Mode"));
 
-        process.stdin.on("keypress", (_, key) => {
-            if (key && (key.name === "q" || key.name === "Q")) {
-                console.log("\nGoodbye!");
-                process.exit(0);
-            }
-        });
+            // Check if basic settings exist
+            const apiConfig = this.configManager.getApiConfig();
 
-        while (true) {
-            const action = await selectSingle({
-                message: "What would you like to do?",
-                choices: [
-                    { name: "List spaces", value: "list" },
-                    { name: "Add space", value: "add" },
-                    { name: "Remove space", value: "remove" },
-                    { name: "Sync space", value: "sync" },
-                    { name: "Sync all spaces", value: "sync-all" },
-                    { name: "Show configuration", value: "show" },
-                    { name: "Exit", value: "exit" },
-                ],
-                pageSize: 10,
-            });
-
-            if (action === "exit") {
-                console.log("\nGoodbye!");
-                Logger.info("interactive", "User exited interactive mode");
-                break;
+            if (!apiConfig.baseUrl || !apiConfig.apiToken) {
+                console.log(chalk.yellow("Initial setup required"));
+                await this.setupInitialConfig();
             }
 
-            try {
-                await this.handleAction(action);
-            } catch (error) {
-                console.error(chalk.red(`Error: ${(error as Error).message}`));
+            // Main menu loop
+            let exit = false;
+            while (!exit) {
+                const action = await select({
+                    message: "Select an action:",
+                    choices: [
+                        { value: "list", name: "List configured spaces" },
+                        { value: "add", name: "Add a new space" },
+                        { value: "remove", name: "Remove a space" },
+                        { value: "sync", name: "Download a space" },
+                        { value: "syncAll", name: "Download all spaces" },
+                        { value: "settings", name: "Configure global settings" },
+                        { value: "exit", name: "Exit" },
+                    ],
+                });
+
+                if (action === "exit") {
+                    exit = true;
+                } else {
+                    await this.handleAction(action);
+                }
             }
 
-            // Add a blank line for readability
-            console.log();
+            console.log(chalk.green("Goodbye!"));
+        } catch (error) {
+            console.error(chalk.red("Error:"), error);
+            process.exit(1);
         }
     }
 
-    private formatSpaceChoice(space: SpaceInfo): string {
-        const description = space.description?.plain?.value
-            ? chalk.dim(` - ${space.description.plain.value}`)
-            : "";
-        return `${chalk.bold(space.name)} ${chalk.cyan(`[${space.key}]`)}${description}`;
+    private formatSpaceChoice(space: SpaceConfig): string {
+        const status = space.enabled ? chalk.green("✓ Enabled") : chalk.gray("✗ Disabled");
+        const lastSynced = space.lastSynced
+            ? new Date(space.lastSynced).toLocaleString()
+            : "Never";
+
+        return `${space.key} - ${space.name} [${status}]\n  Path: ${space.localPath}\n  Last synced: ${lastSynced}`;
+    }
+
+    private async setupInitialConfig(): Promise<void> {
+        console.log(chalk.blue("Setting up initial configuration..."));
+
+        // Get base URL
+        const baseUrl = await input({
+            message: "Enter your Confluence base URL (e.g., https://your-domain.atlassian.net):",
+            validate: (value) => {
+                if (!value) return "Base URL is required";
+                if (!value.startsWith("http")) return "Base URL must start with http:// or https://";
+                return true;
+            },
+        });
+
+        // Get API token
+        const apiToken = await password({
+            message: "Enter your Confluence API token:",
+            mask: "*",
+            validate: (value) => value ? true : "API token is required",
+        });
+
+        // Set concurrency
+        const concurrencyStr = await input({
+            message: "Enter maximum concurrent requests (default: 5):",
+            default: "5",
+            validate: (value) => {
+                const num = parseInt(value);
+                if (isNaN(num) || num < 1) return "Must be a positive number";
+                return true;
+            },
+        });
+
+        const concurrency = parseInt(concurrencyStr);
+
+        // Save configuration
+        this.configManager.setApiConfig(baseUrl, apiToken, concurrency);
+        this.configManager.save();
+
+        console.log(chalk.green("✓ Configuration saved"));
+
+        // Create API client
+        this.client = new ConfluenceClient(this.configManager);
+    }
+
+    private async getOrCreateClient(): Promise<ConfluenceClient> {
+        if (this.client) {
+            return this.client;
+        }
+
+        // Get API configuration
+        const apiConfig = this.configManager.getApiConfig();
+        const baseUrl = apiConfig.baseUrl;
+        const apiToken = apiConfig.apiToken;
+
+        if (!baseUrl || !apiToken) {
+            throw new Error("Base URL and API token must be configured. Use \"settings\" to configure them.");
+        }
+
+        this.client = new ConfluenceClient(this.configManager);
+
+        return this.client;
     }
 
     private async listSpaces(): Promise<void> {
-        const spaces = await this.library.listSpaces();
+        const spaces = this.configManager.getAllSpaceConfigs();
+
         if (spaces.length === 0) {
-            console.log(chalk.yellow("No spaces in library"));
-            Logger.info("interactive", "No spaces in library");
+            console.log(chalk.yellow("No spaces configured. Use \"add\" to add a space."));
             return;
         }
 
-        console.log(chalk.bold("\nSpaces in library:"));
-        Logger.info("interactive", `Listing ${spaces.length} spaces`);
-        spaces.forEach(space => {
-            console.log(chalk.cyan(`\n${space.spaceKey} (${space.localPath})`));
-            console.log(`Last synced: ${new Date(space.lastSync).toLocaleString()}`);
-            Logger.debug(
-                "interactive",
-                `Space: ${space.spaceKey} (${space.localPath}), Last synced: ${
-                    new Date(space.lastSync).toLocaleString()
-                }`,
-            );
-        });
+        console.log(chalk.bold("\nConfigured Spaces:"));
+        for (const space of spaces) {
+            console.log(`\n${this.formatSpaceChoice(space)}`);
+        }
     }
 
     private async addSpace(): Promise<void> {
-        console.log(chalk.cyan("Fetching available spaces from Confluence..."));
-        Logger.info("interactive", "Fetching available spaces from Confluence");
-        const availableSpaces = await this.library.getAvailableSpaces();
-        const existingSpaces = await this.library.listSpaces();
+        const client = await this.getOrCreateClient();
 
-        // Filter out spaces that are already in the library
-        const newSpaces = availableSpaces.filter(space =>
-            !existingSpaces.some(existing => existing.spaceKey === space.key)
-        );
+        // Fetch available spaces from Confluence
+        console.log(chalk.blue("Fetching available spaces from Confluence..."));
+        const spaces = await client.getAllSpaces();
 
-        if (newSpaces.length === 0) {
-            console.log(chalk.yellow("No new spaces available to add"));
-            Logger.info("interactive", "No new spaces available to add");
+        if (spaces.length === 0) {
+            console.log(chalk.yellow("No spaces found in your Confluence instance."));
             return;
         }
 
-        const spaceKeys = await select({
-            message: "Select spaces to add:",
-            multiple: true,
+        // Get existing space configs
+        const existingSpaces = this.configManager.getAllSpaceConfigs();
+        const existingKeys = new Set(existingSpaces.map(s => s.key));
+
+        // Filter out already configured spaces
+        const availableSpaces = spaces.filter(s => !existingKeys.has(s.key));
+
+        if (availableSpaces.length === 0) {
+            console.log(chalk.yellow("All spaces from your Confluence instance are already configured."));
+            return;
+        }
+
+        // Format choices for selection
+        const choices = availableSpaces.map(space => ({
+            value: space.key,
+            name: `${space.key} - ${space.name}`,
+        }));
+
+        // Allow selecting multiple spaces
+        const selectedSpaces = await selectPro({
+            message: "Select spaces to add (use arrow keys to navigate, space to select, enter to confirm):",
+            options: (input = "") => {
+                return choices.filter(choice => choice.name.toLowerCase().includes(input.toLowerCase())) || [];
+            },
             filter: true,
+            multiple: true,
             required: true,
             clearInputWhenSelected: false,
-            options: (input = "") => {
-                const searchTerm = input.toLowerCase();
-                return newSpaces
-                    .filter(space =>
-                        space.key.toLowerCase().includes(searchTerm)
-                        || space.name.toLowerCase().includes(searchTerm)
-                        || space.description?.plain?.value?.toLowerCase().includes(searchTerm)
-                    )
-                    .map(space => ({
-                        name: this.formatSpaceChoice(space),
-                        value: space.key,
-                        description: space.description?.plain?.value,
-                    }));
-            },
-            pageSize: 15,
-            placeholder: "Type to filter spaces...",
         });
 
+        const spaceKeys = Array.isArray(selectedSpaces) ? selectedSpaces : [selectedSpaces];
+
         if (spaceKeys.length === 0) {
-            console.log(chalk.yellow("No spaces selected"));
-            Logger.info("interactive", "No spaces selected for addition");
+            console.log(chalk.yellow("No spaces selected."));
             return;
         }
 
-        // Get local paths for each selected space
-        const localPaths: Record<string, string> = {};
-        const baseOutputDir = process.env.CONFLUENCE_OUTPUT_DIR || "";
+        // Get output directory for each space
+        const spaceConfigs: SpaceConfig[] = [];
 
         for (const spaceKey of spaceKeys) {
-            const space = newSpaces.find(s => s.key === spaceKey)!;
-            const defaultPath = path.join(baseOutputDir, space.key.toLowerCase());
-            const suggestedPath = path.join(baseOutputDir, space.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"));
+            const spaceInfo = spaces.find(s => s.key === spaceKey)!;
 
-            const localPath = await selectSingle({
-                message: `Enter local directory name for ${chalk.cyan(space.key)} (${space.name}):`,
-                choices: [
-                    { name: defaultPath, value: space.key.toLowerCase() },
-                    { name: suggestedPath, value: space.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") },
-                    { name: "Custom...", value: "custom" },
-                ],
+            // Get output directory
+            const defaultPath = path.join(this.configManager.relativePath(toLowerKebabCase(spaceInfo.name)));
+            const outputDir = await input({
+                message: `Enter local path for space ${spaceKey}:`,
+                default: defaultPath,
             });
 
-            if (localPath === "custom") {
-                // TODO: Add custom input prompt when @inquirer/prompts adds input support
-                // For now, use the space key
-                localPaths[spaceKey] = space.key.toLowerCase();
-            } else {
-                localPaths[spaceKey] = localPath;
-            }
+            // Create space config
+            spaceConfigs.push({
+                id: spaceInfo.id.toString(),
+                key: spaceInfo.key,
+                name: spaceInfo.name,
+                description: spaceInfo.description,
+                localPath: resolve(outputDir),
+                lastSynced: new Date().toISOString(),
+                enabled: true,
+                status: "current",
+            });
         }
 
-        // Add each selected space
-        for (const spaceKey of spaceKeys) {
-            await this.library.addSpace(spaceKey, localPaths[spaceKey]);
-            console.log(chalk.green(`Added space ${spaceKey}`));
-            Logger.info("interactive", `Added space ${spaceKey}`);
+        // Save space configs
+        for (const config of spaceConfigs) {
+            this.configManager.saveSpaceConfig(config);
         }
+        this.configManager.save();
+
+        console.log(chalk.green(`✓ Added ${spaceConfigs.length} space(s)`));
 
         // Ask if user wants to sync now
-        if (spaceKeys.length > 0) {
-            const syncNow = await confirm({
-                message: `Would you like to sync ${spaceKeys.length > 1 ? "these spaces" : "this space"} now?`,
-                default: true,
-            });
+        const syncNow = await confirm({
+            message: "Do you want to download these spaces now?",
+            default: true,
+        });
 
-            if (syncNow) {
-                for (const spaceKey of spaceKeys) {
-                    console.log(chalk.cyan(`\nSyncing space ${spaceKey}...`));
-                    Logger.info("interactive", `Starting sync of space ${spaceKey}`);
-                    await this.library.syncSpace(spaceKey);
-                    console.log(chalk.green(`Synced space ${spaceKey}`));
-                    Logger.info("interactive", `Completed sync of space ${spaceKey}`);
-                }
+        if (syncNow) {
+            for (const spaceKey of spaceKeys) {
+                console.log(chalk.cyan(`\nSyncing space ${spaceKey}...`));
+                const client = await this.getOrCreateClient();
+                const downloader = new ContentStream(client, [spaceKey]);
+                await pipeline(downloader, new ContentWriter(this.configManager));
+
+                // Update last synced timestamp
+                this.configManager.updateSpaceLastSynced(spaceKey);
+                this.configManager.save();
+
+                console.log(chalk.green(`✓ Space ${spaceKey} successfully downloaded`));
             }
         }
     }
 
     private async removeSpace(): Promise<void> {
-        const spaces = await this.library.listSpaces();
+        const spaces = this.configManager.getAllSpaceConfigs();
+
         if (spaces.length === 0) {
-            console.log(chalk.yellow("No spaces in library"));
-            Logger.info("interactive", "No spaces in library to remove");
+            console.log(chalk.yellow("No spaces configured."));
             return;
         }
 
-        const singleSpaceKey = await selectSingle({
-            message: "Select space to remove:",
-            choices: spaces.map(space => ({
-                name: `${space.spaceKey} (${space.localPath})`,
-                value: space.spaceKey,
-            })),
+        // Format choices for selection
+        const choices = spaces.map(space => ({
+            value: space.key,
+            label: `${space.key} - ${space.name}`,
+        }));
+
+        // Select space to remove
+        const spaceKey = await select({
+            message: "Select a space to remove:",
+            choices,
         });
 
-        const shouldRemove = await confirm({
-            message: chalk.yellow(
-                `Are you sure you want to remove ${singleSpaceKey}? This will delete all local files.`,
-            ),
+        // Confirm removal
+        const confirmed = await confirm({
+            message: `Are you sure you want to remove ${spaceKey}? This will not delete downloaded content.`,
             default: false,
         });
 
-        if (shouldRemove) {
-            await this.library.removeSpace(singleSpaceKey);
-            console.log(chalk.green(`Removed space ${singleSpaceKey}`));
-            Logger.info("interactive", `Removed space ${singleSpaceKey}`);
+        if (confirmed) {
+            this.configManager.removeSpaceConfig(spaceKey);
+            this.configManager.save();
+            console.log(chalk.green(`✓ Space ${spaceKey} removed`));
+        } else {
+            console.log("Operation cancelled");
         }
     }
 
-    private async syncSpace(): Promise<void> {
-        const spaces = await this.library.listSpaces();
+    private async downloadSpace(): Promise<void> {
+        const spaces = this.configManager.getAllSpaceConfigs();
+
         if (spaces.length === 0) {
-            console.log(chalk.yellow("No spaces in library"));
+            console.log(chalk.yellow("No spaces configured. Use \"add\" to add a space."));
             return;
         }
 
-        const singleSpaceKey = await selectSingle({
-            message: "Select space to sync:",
-            choices: spaces.map(space => ({
-                name: `${space.spaceKey} (${space.localPath}) - Last sync: ${
-                    new Date(space.lastSync).toLocaleString()
-                }`,
-                value: space.spaceKey,
-            })),
+        // Format choices for selection
+        const choices = spaces.map(space => ({
+            value: space.key,
+            label: `${space.key} - ${space.name}`,
+        }));
+
+        // Select space to download
+        const spaceKey = await select({
+            message: "Select a space to download:",
+            choices,
         });
 
-        console.log(chalk.cyan(`\nSyncing space ${singleSpaceKey}...`));
-        Logger.info("interactive", `Starting sync of space ${singleSpaceKey}`);
-        await this.library.syncSpace(singleSpaceKey);
-        console.log(chalk.green(`Synced space ${singleSpaceKey}`));
-        Logger.info("interactive", `Completed sync of space ${singleSpaceKey}`);
-    }
-
-    private async syncAllSpaces(): Promise<void> {
-        const spaces = await this.library.listSpaces();
-        if (spaces.length === 0) {
-            console.log(chalk.yellow("No spaces in library"));
-            Logger.info("interactive", "No spaces in library to sync");
+        const spaceConfig = this.configManager.getSpaceConfig(spaceKey);
+        if (!spaceConfig) {
+            console.log(chalk.red(`Space configuration not found for ${spaceKey}`));
             return;
         }
 
-        const shouldSync = await confirm({
-            message: `Sync all ${spaces.length} spaces?`,
+        // Get client
+        const client = await this.getOrCreateClient();
+
+        // Initialize content downloader
+        console.log(chalk.cyan(`\nDownloading space ${spaceKey} to ${spaceConfig.localPath}...`));
+
+        try {
+            // Download space content
+            const downloader = new ContentStream(client, [spaceKey]);
+            await pipeline(downloader, new ContentWriter(this.configManager));
+
+            // Update last synced timestamp
+            this.configManager.updateSpaceLastSynced(spaceKey);
+            this.configManager.save();
+
+            console.log(chalk.green(`✓ Space ${spaceKey} successfully downloaded`));
+        } catch (error) {
+            console.error(chalk.red("Error downloading space:"), error);
+        }
+    }
+
+    private async downloadAllSpaces(): Promise<void> {
+        const spaces = this.configManager.getAllSpaceConfigs();
+
+        if (spaces.length === 0) {
+            console.log(chalk.yellow("No spaces configured. Use \"add\" to add a space."));
+            return;
+        }
+
+        // Filter enabled spaces
+        const enabledSpaces = spaces.filter(s => s.enabled);
+
+        if (enabledSpaces.length === 0) {
+            console.log(chalk.yellow("No enabled spaces found. Enable spaces using \"settings\"."));
+            return;
+        }
+
+        // Confirm download
+        const confirmed = await confirm({
+            message: `Download all ${enabledSpaces.length} enabled spaces?`,
             default: true,
         });
 
-        if (shouldSync) {
-            console.log(chalk.cyan("\nStarting sync of all spaces..."));
-            Logger.info("interactive", "Starting sync of all spaces");
-            await this.library.syncAll();
-            console.log(chalk.green("\nCompleted sync of all spaces"));
-            Logger.info("interactive", "Completed sync of all spaces");
+        if (!confirmed) {
+            console.log("Operation cancelled");
+            return;
+        }
+
+        // Get client
+        const client = await this.getOrCreateClient();
+
+        // Initialize content downloader
+        console.log(chalk.cyan(`\nDownloading ${enabledSpaces.length} spaces...`));
+
+        try {
+            console.log(`Downloading all spaces...`);
+            const downloader = new ContentStream(client, enabledSpaces.map(s => s.key));
+            await pipeline(downloader, new ContentWriter(this.configManager));
+
+            for (const space of enabledSpaces) {
+                this.configManager.updateSpaceLastSynced(space.key);
+                this.configManager.save();
+                console.log(chalk.green(`✓ Space ${space.key} successfully downloaded`));
+            }
+
+            console.log(chalk.green(`\n✓ All ${enabledSpaces.length} spaces successfully downloaded`));
+        } catch (error) {
+            console.error(chalk.red("Error downloading spaces:"), error);
+        }
+    }
+
+    private async configureSettings(): Promise<void> {
+        const settingsMenu = async (): Promise<boolean> => {
+            const action = await select({
+                message: "Settings:",
+                choices: [
+                    { value: "api", name: "Configure API settings" },
+                    { value: "spaces", name: "Configure spaces" },
+                    { value: "back", name: "Back to main menu" },
+                ],
+            });
+
+            switch (action) {
+                case "api":
+                    await this.setupInitialConfig();
+                    return true;
+
+                case "spaces":
+                    await this.configureSpaces();
+                    return true;
+
+                case "back":
+                    return false;
+            }
+
+            return true;
+        };
+
+        let continueSettings = true;
+        while (continueSettings) {
+            continueSettings = await settingsMenu();
+        }
+    }
+
+    private async configureSpaces(): Promise<void> {
+        const spaces = this.configManager.getAllSpaceConfigs();
+
+        if (spaces.length === 0) {
+            console.log(chalk.yellow("No spaces configured. Use \"add\" to add a space."));
+            return;
+        }
+
+        // Format choices for selection
+        const choices = spaces.map(space => ({
+            value: space.key,
+            label: `${space.key} - ${space.name} [${space.enabled ? "Enabled" : "Disabled"}]`,
+        }));
+
+        // Select space to configure
+        const spaceKey = await select({
+            message: "Select a space to configure:",
+            choices,
+        });
+
+        const space = this.configManager.getSpaceConfig(spaceKey);
+        if (!space) {
+            console.log(chalk.red(`Space configuration not found for ${spaceKey}`));
+            return;
+        }
+
+        // Toggle enabled status
+        const newStatus = !space.enabled;
+        const confirmed = await confirm({
+            message: `${newStatus ? "Enable" : "Disable"} space ${spaceKey}?`,
+            default: true,
+        });
+
+        if (confirmed) {
+            space.enabled = newStatus;
+            this.configManager.saveSpaceConfig(space);
+            this.configManager.save();
+            console.log(chalk.green(`✓ Space ${spaceKey} ${newStatus ? "enabled" : "disabled"}`));
+        } else {
+            console.log("Operation cancelled");
         }
     }
 
     private async handleAction(action: string): Promise<void> {
-        Logger.info("interactive", `Handling action: ${action}`);
         switch (action) {
-            case "show": {
-                const config = await this.library.getConfig();
-                console.log(chalk.cyan("\nConfiguration Location:"));
-                console.log(this.library.configPath);
-                console.log();
-                console.log(chalk.cyan("Configuration Data:"));
-                console.log(JSON.stringify(config, null, 2));
-                console.log();
-                Logger.debug("interactive", "Showing configuration", { path: this.library.configPath, config });
-                break;
-            }
             case "list":
                 await this.listSpaces();
                 break;
+
             case "add":
                 await this.addSpace();
                 break;
+
             case "remove":
                 await this.removeSpace();
                 break;
+
             case "sync":
-                await this.syncSpace();
+                await this.downloadSpace();
                 break;
-            case "sync-all":
-                await this.syncAllSpaces();
+
+            case "syncAll":
+                await this.downloadAllSpaces();
+                break;
+
+            case "settings":
+                await this.configureSettings();
                 break;
         }
     }

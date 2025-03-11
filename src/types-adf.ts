@@ -1,20 +1,15 @@
-import type { ConfluencePage } from "./types.js";
+import type { ConfluencePage } from "./content-downloader.js";
 
 /**
  * Enhanced Confluence page interface with ADF support
  */
 export interface AdfConfluencePage extends ConfluencePage {
     body: {
-        // Original HTML content from the storage field
-        storage: {
+        // ADF content field
+        atlas_doc_format?: {
             value: string;
             representation: string;
-            embeddedContent?: unknown[];
         };
-        // ADF content field
-        adf?: AdfDocument;
-        // Other fields like atlas_doc_format that might be in a Confluence page body
-        _expandable?: Record<string, string>;
     };
 }
 
@@ -126,4 +121,4 @@ export interface SubsupMarkAttrs {
 
 export interface IndentationMarkAttrs {
     indentLevel: number; // Changed from "level" to avoid duplication
-} 
+}

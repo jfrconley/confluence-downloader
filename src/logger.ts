@@ -10,6 +10,9 @@ const NAMESPACES = {
     library: `${NAMESPACE_BASE}:library`,
     cli: `${NAMESPACE_BASE}:cli`,
     interactive: `${NAMESPACE_BASE}:interactive`,
+    downloader: `${NAMESPACE_BASE}:downloader`,
+    db: `${NAMESPACE_BASE}:db`,
+    contentWriter: `${NAMESPACE_BASE}:content-writer`,
 };
 
 // Define severity levels within each namespace

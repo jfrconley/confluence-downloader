@@ -1,247 +1,180 @@
 # Confluence Downloader
 
-A powerful CLI tool to download and sync Confluence spaces to local markdown files, maintaining the original page hierarchy and metadata.
+A command-line tool for downloading Confluence spaces and storing them in a SQLite database for further processing.
 
 ## Features
 
-- 🚀 Interactive CLI for easy space management
-- 📁 Maintains Confluence page hierarchy in local directory structure
-- 🔄 Incremental sync with last update tracking
-- 🏷️ Preserves page metadata, labels, and comments
-- 📝 Converts Confluence content to clean markdown
-- 🌳 Directory-based structure for pages with children
-- ⚡ Concurrent processing for faster downloads
-- 🔍 Fuzzy search for space selection
-- 🎨 Beautiful progress bars and status updates
+- ✅ Download Confluence spaces to SQLite databases
+- ✅ Preserve content structure, relationships, and metadata
+- ✅ Centralized application and space configuration
+- ✅ Interactive mode for easy usage
+- ✅ Support for comments and folders
+- ✅ Batched content downloading with progress reporting
 
 ## Installation
 
 ```bash
-# Using npm
 npm install -g @jfconley/confluence-downloader
-
-# Using pnpm
-pnpm add -g @jfconley/confluence-downloader
-
-# Using yarn
-yarn global add @jfconley/confluence-downloader
 ```
 
-## Quick Start
-
-1. Create a `.env` file with your Confluence credentials:
-
-```env
-CONFLUENCE_BASE=https://your-domain.atlassian.net
-CONFLUENCE_TOKEN=your-api-token
-CONFLUENCE_EMAIL=your-email@domain.com
-CONFLUENCE_CONFIG=./confluence.json
-```
-
-2. Initialize the library:
+Or use it directly with npx:
 
 ```bash
-confluence-downloader init
+npx @jfconley/confluence-downloader <command>
 ```
 
-3. Start the interactive mode:
+## Usage
+
+### Quick Start
+
+1. Initialize the database and configuration:
+   ```bash
+   confluence-downloader init
+   ```
+
+2. Add a Confluence space:
+   ```bash
+   confluence-downloader spaces add --spaceKey YOUR_SPACE_KEY
+   ```
+
+3. Download content:
+   ```bash
+   confluence-downloader download --spaceKey YOUR_SPACE_KEY
+   ```
+
+### Interactive Mode
+
+For an easier, guided experience:
 
 ```bash
 confluence-downloader interactive
 ```
 
-## Usage
+This provides a menu-driven interface for all operations.
 
-### Interactive Mode
+## CLI Commands
 
-The easiest way to use the tool is through interactive mode:
+### Initialize Configuration
 
 ```bash
-confluence-downloader interactive -t <token> -b <base-url> -c <config-path>
+confluence-downloader init
 ```
 
-This provides a menu-driven interface with the following options:
-- List spaces
-- Add space
-- Remove space
-- Sync space
-- Sync all spaces
-- Show configuration
-- Exit
+Creates and initializes the SQLite database with basic settings, prompting for:
+- Confluence base URL
+- API token
+- Concurrency level
 
-### Command Line Interface
+### Settings Management
 
 ```bash
-# Initialize a new library
-confluence-downloader init --baseUrl <url> --apiToken <token>
+# List all settings
+confluence-downloader settings list
 
-# Add a space
-confluence-downloader add-space --spaceKey <key> [--localPath <path>]
+# Get a specific setting
+confluence-downloader settings get --key baseUrl
+
+# Set a setting value
+confluence-downloader settings set --key baseUrl --value "https://your-instance.atlassian.net"
+
+# Remove a setting
+confluence-downloader settings remove --key customSetting
+```
+
+### Space Management
+
+```bash
+# List configured spaces
+confluence-downloader spaces list
+
+# Add a space (interactive)
+confluence-downloader spaces add
+
+# Add a specific space
+confluence-downloader spaces add --spaceKey DOCS --output ./docs
 
 # Remove a space
-confluence-downloader remove-space --spaceKey <key>
-
-# List configured spaces
-confluence-downloader list-spaces
-
-# Sync a specific space
-confluence-downloader sync --spaceKey <key>
-
-# Sync all configured spaces
-confluence-downloader sync
-
-# Show configuration
-confluence-downloader show
+confluence-downloader spaces remove --spaceKey DOCS
 ```
 
-### Legacy Single Space Sync
-
-For one-off space downloads without library management:
+### Content Download
 
 ```bash
-confluence-downloader sync-space \
-  --baseUrl <url> \
-  --apiToken <token> \
-  --spaceKey <key> \
-  --outputDir <dir> \
-  --email <email>
+# Download a space's content to the database
+confluence-downloader download --spaceKey DOCS
 ```
+
+## Database Schema
+
+The SQLite database uses the following structure:
+
+### `settings` Table
+Stores application-wide settings as key-value pairs:
+- `key` - Setting name (primary key)
+- `value` - Setting value
+
+### `spaces` Table
+Stores Confluence space configurations:
+- `id` - Space ID (primary key)
+- `key` - Space key (unique)
+- `name` - Space name
+- `description` - Space description
+- `local_path` - Local path for content
+- `base_url` - Confluence instance URL
+- `last_synced` - Last sync timestamp
+- `enabled` - Whether the space is enabled
+- `status` - Space status
+
+### `pages` Table
+Stores Confluence pages:
+- `id` - Page ID (primary key)
+- `space_key` - Space key
+- `title` - Page title
+- `status` - Page status
+- `body_storage` - HTML content
+- `body_atlas_doc_format` - ADF content
+- Other metadata fields
+
+### `comments` Table
+Stores page comments:
+- `id` - Comment ID (primary key)
+- `space_key` - Space key
+- `container_id` - Parent page ID
+- `comment_type` - 'inline' or 'footer'
+- Reference and content fields
+
+### `folders` Table
+Stores Confluence folders:
+- `id` - Folder ID (primary key)
+- `space_key` - Space key
+- `title` - Folder title
+- Metadata fields
+
+### `ancestors` Table
+Stores parent-child relationships:
+- `id` - Content ID
+- `ancestor_id` - Ancestor ID
+- `position` - Position in ancestor chain
+
+### `labels` Table
+Stores content labels:
+- `content_id` - Content ID
+- `label_name` - Label name
 
 ## Configuration
 
-### Environment Variables
+Default database location: `~/.local/share/confluence-downloader/confluence.db`
 
-| Variable | Description |
-|----------|-------------|
-| `CONFLUENCE_BASE` | Base URL of your Confluence instance |
-| `CONFLUENCE_TOKEN` | Confluence API token |
-| `CONFLUENCE_EMAIL` | Your Confluence account email |
-| `CONFLUENCE_CONFIG` | Path to configuration file |
-| `CONFLUENCE_OUTPUT_DIR` | Default output directory for spaces |
-| `DEBUG` | Control debug output (e.g., `DEBUG=confluence-downloader:*`) |
-
-### Debug Logging
-
-The tool supports detailed debug logging using the [debug](https://github.com/debug-js/debug) library:
+Override with `--dbPath` option:
 
 ```bash
-# Enable debug logging to file
-confluence-downloader <command> --debug
-
-# Specify custom log file path
-confluence-downloader <command> --debug --debugLogPath ./logs/debug.log
-
-# Filter specific components using the DEBUG environment variable
-DEBUG=confluence-downloader:api:* confluence-downloader <command>
+confluence-downloader --dbPath /custom/path/confluence.db spaces list
 ```
 
-Debug namespaces available:
-- `confluence-downloader:api:*` - API client operations
-- `confluence-downloader:converter:*` - Markdown conversion
-- `confluence-downloader:library:*` - Library management
-- `confluence-downloader:cli:*` - CLI operations
-- `confluence-downloader:interactive:*` - Interactive mode
+## Environment Variables
 
-Severity levels:
-- `error` - Error messages
-- `warn` - Warnings
-- `info` - Informational messages
-- `debug` - Detailed debug information
-- `trace` - Verbose tracing information
-
-Example:
-```bash
-# Log only errors and warnings from the API client
-DEBUG=confluence-downloader:api:error,confluence-downloader:api:warn confluence-downloader sync
-```
-
-### Configuration Files
-
-The tool maintains two types of configuration files:
-
-1. `confluence.json` (Library configuration):
-```json
-{
-  "baseUrl": "https://your-domain.atlassian.net",
-  "spaces": [
-    {
-      "spaceKey": "SPACE",
-      "localPath": "space-docs",
-      "lastSync": "2024-01-22T12:00:00.000Z"
-    }
-  ]
-}
-```
-
-2. `space.json` (Space metadata, one per space):
-```json
-{
-  "key": "SPACE",
-  "name": "Space Name",
-  "description": "Space description",
-  "lastSynced": "2024-01-22T12:00:00.000Z"
-}
-```
-
-## Output Structure
-
-The tool creates a clean, hierarchical directory structure:
-
-```
-output-dir/
-├── space-1/
-│   ├── space.json
-│   ├── Page 1.md
-│   └── Directory Page/
-│       ├── description.md
-│       ├── Child Page 1.md
-│       └── Child Page 2.md
-└── space-2/
-    ├── space.json
-    └── ...
-```
-
-Pages with children are saved as `description.md` inside their respective directories.
-
-### Markdown Format
-
-Each markdown file includes:
-- YAML frontmatter with metadata
-- Original Confluence content
-- Comments section (if any)
-
-Example:
-```markdown
----
-title: Page Title
-labels:
-  - label1
-  - label2
-author: John Doe
-lastUpdated: 2024-01-22T12:00:00.000Z
-confluence:
-  id: 123456
-  version: 5
-  space: SPACE
----
-
-# Page Title
-
-Page content in markdown format...
-
----
-
-## Comments
-
-### Jane Smith (Jan 20, 2024)
-Comment content in markdown format...
-```
-
-## Requirements
-
-- Node.js >= 18.0.0
-- A valid Confluence API token
-- Confluence Cloud instance
+- `CONFLUENCE_API_TOKEN` - Confluence API token
+- `CONFLUENCE_EMAIL` - Confluence account email
 
 ## License
 
